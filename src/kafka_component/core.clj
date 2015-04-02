@@ -5,19 +5,18 @@
 
 (defn consume-messages-task
   [logger exception-handler message-consumer thread-id messages kafka-consumer]
-  (bound-fn*
-   (fn []
-     (logger :info (str "consumer thread " thread-id " starting"))
-     (doseq [m messages]
-       (try
-         (do
-           (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
-           (message-consumer m)
-           (.commitOffsets kafka-consumer))
-         (catch Exception e
-           (do (logger :error (str "error in consumer thread " thread-id))
-               (logger :error e)
-               (exception-handler e))))))))
+  (fn []
+    (logger :info (str "consumer thread " thread-id " starting"))
+    (doseq [m messages]
+      (try
+        (do
+          (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
+          (message-consumer m)
+          (.commitOffsets kafka-consumer))
+        (catch Exception e
+          (do (logger :error (str "error in consumer thread " thread-id))
+              (logger :error e)
+              (exception-handler e)))))))
 
 (defrecord KafkaConsumerPool [config pool-size topic consumer-component logger exception-handler]
   component/Lifecycle
