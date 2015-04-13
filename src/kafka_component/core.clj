@@ -1,6 +1,7 @@
 (ns kafka-component.core
   (:require [com.stuartsierra.component :as component]
-            [clj-kafka.consumer.zk :refer [consumer shutdown messages]])
+            [clj-kafka.consumer.zk :refer [consumer shutdown messages]]
+            [clj-kafka.producer :refer [producer]])
   (:import [java.util.concurrent Executors TimeUnit]))
 
 (defn consume-messages-task
@@ -40,3 +41,17 @@
     (doseq [consumer kafka-consumers] (.shutdown consumer))
     (logger :info (str "stoppped " topic " consumption"))
     c))
+
+(def kafka-producer-config
+  {"serializer.class" "kafka.serializer.StringEncoder"
+   "request.required.acks" "-1"
+   "partitioner.class" "kafka.producer.DefaultPartitioner"})
+
+(defrecord KafkaProducer [config]
+  component/Lifecycle
+  (start [c]
+    (assoc c :producer (producer (merge config kafka-producer-config))))
+  (stop [c]
+    (when-let [p (:producer c)]
+      (.close p)
+      (dissoc c :producer))))
