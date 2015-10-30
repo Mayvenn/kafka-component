@@ -3,6 +3,6 @@
   :url "https://github.com/Mayvenn/kafka-component"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.6.0"]
+  :dependencies [[org.clojure/clojure "1.7.0"]
                  [com.stuartsierra/component "0.2.2"]
-                 [clj-kafka "0.2.8-0.8.1.1"]])
+                 [clj-kafka "0.3.2"]])
