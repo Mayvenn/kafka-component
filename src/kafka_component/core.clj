@@ -4,7 +4,7 @@
             [clj-kafka.producer :refer [producer]])
   (:import [java.util.concurrent Executors TimeUnit]))
 
-(defn consume-messages-task
+(defn ^:private consume-messages-task
   [logger exception-handler message-consumer thread-id messages kafka-consumer]
   (fn []
     (logger :info (str "consumer thread " thread-id " starting"))
