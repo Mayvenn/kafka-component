@@ -50,7 +50,7 @@
 (defrecord KafkaProducer [config]
   component/Lifecycle
   (start [c]
-    (assoc c :producer (producer (merge config kafka-producer-config))))
+    (assoc c :producer (producer (merge kafka-producer-config config))))
   (stop [c]
     (when-let [p (:producer c)]
       (.close p)
