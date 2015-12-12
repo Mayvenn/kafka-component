@@ -39,7 +39,7 @@
       (.shutdown thread-pool)
       (.awaitTermination thread-pool (config :shutdown-grace-period) TimeUnit/SECONDS))
     (doseq [consumer kafka-consumers] (.shutdown consumer))
-    (logger :info (str "stoppped " topic " consumption"))
+    (logger :info (str "stopped " topic " consumption"))
     c))
 
 (def kafka-producer-config
