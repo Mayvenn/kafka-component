@@ -5,10 +5,10 @@
   (:import [java.util.concurrent Executors TimeUnit]))
 
 (defn ^:private consume-messages-task
-  [logger exception-handler message-consumer thread-id messages kafka-consumer]
+  [logger exception-handler message-consumer topic thread-id kafka-consumer]
   (fn []
     (logger :info (str "consumer thread " thread-id " starting"))
-    (doseq [m messages]
+    (doseq [m (messages kafka-consumer topic)]
       (try
         (do
           (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
@@ -25,10 +25,8 @@
     (logger :info (str "starting " topic " consumption"))
     (let [thread-pool (Executors/newFixedThreadPool pool-size)
           kafka-consumers (repeatedly pool-size #(consumer (config :kafka-consumer-config)))
-          message-lists (map #(messages % topic) kafka-consumers)
-          tasks (map (partial consume-messages-task logger exception-handler (:consumer consumer-component))
+          tasks (map (partial consume-messages-task logger exception-handler (:consumer consumer-component) topic)
                      (map (partial str topic "-") (range))
-                     message-lists
                      kafka-consumers)]
       (doseq [t tasks] (.submit thread-pool t))
       (logger :info (str "started " topic " consumption"))
