@@ -42,7 +42,7 @@
       (.shutdown thread-pool)
       (.awaitTermination thread-pool (config :shutdown-grace-period) TimeUnit/SECONDS)
     (logger :info (str "stopped " topic " consumption"))
-    c))
+    c)))
 
 (def kafka-producer-config
   {"serializer.class" "kafka.serializer.StringEncoder"
