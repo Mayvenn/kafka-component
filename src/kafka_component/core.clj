@@ -17,7 +17,8 @@
         (catch Exception e
           (do (logger :error (str "error in consumer thread " thread-id))
               (logger :error e)
-              (exception-handler e)))))))
+              (exception-handler e)))))
+    (logger :info (str "consumer thread " thread-id " exiting"))))
 
 (defrecord KafkaConsumerPool [config pool-size topic consumer-component logger exception-handler]
   component/Lifecycle
@@ -33,10 +34,13 @@
       (merge c {:thread-pool thread-pool :kafka-consumers kafka-consumers})))
   (stop [{:keys [logger thread-pool kafka-consumers] :or {logger :noop} :as c}]
     (logger :info (str "stopping " topic " consumption"))
+    ;; shutting down consumers in parallel seems to cause less rebalances and shuts down more quickly
+    ;; eventually, when offset committing is more granular, it'll be way nicer to only have one consumer
+    ;; for all the threads
+    (doall (pmap shutdown kafka-consumers))
     (when thread-pool
       (.shutdown thread-pool)
-      (.awaitTermination thread-pool (config :shutdown-grace-period) TimeUnit/SECONDS))
-    (doseq [consumer kafka-consumers] (.shutdown consumer))
+      (.awaitTermination thread-pool (config :shutdown-grace-period) TimeUnit/SECONDS)
     (logger :info (str "stopped " topic " consumption"))
     c))
 
