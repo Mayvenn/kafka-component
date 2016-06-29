@@ -10,14 +10,13 @@
     (logger :info (str "consumer thread " thread-id " starting"))
     (doseq [m (messages kafka-consumer topic)]
       (try
-        (do
-          (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
-          (message-consumer m)
-          (.commitOffsets kafka-consumer))
+        (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
+        (message-consumer m)
+        (.commitOffsets kafka-consumer)
         (catch Exception e
-          (do (logger :error (str "error in consumer thread " thread-id))
-              (logger :error e)
-              (exception-handler e)))))
+          (logger :error (str "error in consumer thread " thread-id))
+          (logger :error e)
+          (exception-handler e))))
     (logger :info (str "consumer thread " thread-id " exiting"))))
 
 (defrecord KafkaConsumerPool [config pool-size topic consumer-component logger exception-handler]
