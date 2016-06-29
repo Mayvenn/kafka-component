@@ -40,11 +40,11 @@
           tasks (map (partial consume-messages-task logger shutting-down exception-handler (:consumer consumer-component) topic)
                      (map (partial str topic "-") (range))
                      kafka-consumers)]
-      (reset! shutting-down true)
       (doseq [t tasks] (.submit thread-pool t))
       (logger :info (str "started " topic " consumption"))
-      (merge c {:thread-pool thread-pool :kafka-consumers kafka-consumers})))
-  (stop [{:keys [logger thread-pool kafka-consumers] :or {logger :noop} :as c}]
+      (merge c {:thread-pool thread-pool :kafka-consumers kafka-consumers :shutting-down shutting-down})))
+  (stop [{:keys [logger thread-pool kafka-consumers shutting-down] :or {logger :noop} :as c}]
+    (reset! shutting-down true)
     (logger :info (str "stopping " topic " consumption"))
     ;; shutting down consumers in parallel seems to cause less rebalances and shuts down more quickly
     ;; eventually, when offset committing is more granular, it'll be way nicer to only have one consumer
