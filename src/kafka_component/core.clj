@@ -5,29 +5,42 @@
   (:import [java.util.concurrent Executors TimeUnit]))
 
 (defn ^:private consume-messages-task
-  [logger exception-handler message-consumer topic thread-id kafka-consumer]
+  [logger exception-handler shutting-down message-consumer topic thread-id kafka-consumer]
   (fn []
     (logger :info (str "consumer thread " thread-id " starting"))
     (doseq [m (messages kafka-consumer topic)]
+      (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
       (try
-        (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
         (message-consumer m)
-        (.commitOffsets kafka-consumer)
         (catch Exception e
           (logger :error (str "error in consumer thread " thread-id))
           (logger :error e)
-          (exception-handler e))))
+          (exception-handler e)))
+      ;; separate try/catch for committing offsets since the kafka consumer could have been shut down
+      ;; and when the kafka consumer shuts down, it nils out its internal ZK client which causes null pointers
+      ;; and other related problems. Thus, we specially catch this exception and only report it if we're not
+      ;; shutting down. This solution is a bit simpler/less complex albeit not necessarily as clean as if we
+      ;; ourselves polled for messages and only shut down consumers after the thread has cleanly exited.
+      (try
+        (.commitOffsets kafka-consumer)
+        (catch Exception e
+          (when-not @shutting-down
+            (logger :error (str "failed to commit offsets in thread " thread-id))
+            (logger :error e)
+            (exception-handler e)))))
     (logger :info (str "consumer thread " thread-id " exiting"))))
 
 (defrecord KafkaConsumerPool [config pool-size topic consumer-component logger exception-handler]
   component/Lifecycle
   (start [c]
     (logger :info (str "starting " topic " consumption"))
-    (let [thread-pool (Executors/newFixedThreadPool pool-size)
+    (let [shutting-down (atom false)
+          thread-pool (Executors/newFixedThreadPool pool-size)
           kafka-consumers (repeatedly pool-size #(consumer (config :kafka-consumer-config)))
-          tasks (map (partial consume-messages-task logger exception-handler (:consumer consumer-component) topic)
+          tasks (map (partial consume-messages-task logger shutting-down exception-handler (:consumer consumer-component) topic)
                      (map (partial str topic "-") (range))
                      kafka-consumers)]
+      (reset! shutting-down true)
       (doseq [t tasks] (.submit thread-pool t))
       (logger :info (str "started " topic " consumption"))
       (merge c {:thread-pool thread-pool :kafka-consumers kafka-consumers})))
