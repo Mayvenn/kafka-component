@@ -39,7 +39,7 @@
     (let [shutting-down (atom false)
           thread-pool (Executors/newFixedThreadPool pool-size)
           kafka-consumers (repeatedly pool-size #(consumer (config :kafka-consumer-config)))
-          tasks (map (partial consume-messages-task logger shutting-down exception-handler (:consumer consumer-component) topic)
+          tasks (map (partial consume-messages-task logger exception-handler shutting-down (:consumer consumer-component) topic)
                      (map (partial str topic "-") (range))
                      kafka-consumers)]
       (doseq [t tasks] (.submit thread-pool t))
