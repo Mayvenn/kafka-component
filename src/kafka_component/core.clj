@@ -12,22 +12,24 @@
       (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
       (try
         (message-consumer m)
+
+        ;; separate try/catch for committing offsets since the kafka consumer could have been shut down
+        ;; and when the kafka consumer shuts down, it nils out its internal ZK client which causes null pointers
+        ;; and other related problems. Thus, we specially catch this exception and only report it if we're not
+        ;; shutting down. This solution is a bit simpler/less complex albeit not necessarily as clean as if we
+        ;; ourselves polled for messages and only shut down consumers after the thread has cleanly exited.
+        (try
+          (.commitOffsets kafka-consumer)
+          (catch Exception e
+            (when-not @shutting-down
+              (logger :error (str "failed to commit offsets in thread " thread-id))
+              (logger :error e)
+              (exception-handler e))))
+
         (catch Exception e
           (logger :error (str "error in consumer thread " thread-id))
           (logger :error e)
-          (exception-handler e)))
-      ;; separate try/catch for committing offsets since the kafka consumer could have been shut down
-      ;; and when the kafka consumer shuts down, it nils out its internal ZK client which causes null pointers
-      ;; and other related problems. Thus, we specially catch this exception and only report it if we're not
-      ;; shutting down. This solution is a bit simpler/less complex albeit not necessarily as clean as if we
-      ;; ourselves polled for messages and only shut down consumers after the thread has cleanly exited.
-      (try
-        (.commitOffsets kafka-consumer)
-        (catch Exception e
-          (when-not @shutting-down
-            (logger :error (str "failed to commit offsets in thread " thread-id))
-            (logger :error e)
-            (exception-handler e)))))
+          (exception-handler e))))
     (logger :info (str "consumer thread " thread-id " exiting"))))
 
 (defrecord KafkaConsumerPool [config pool-size topic consumer-component logger exception-handler]
