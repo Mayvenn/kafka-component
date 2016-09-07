@@ -9,7 +9,7 @@ The consumer component will manually commit offsets after each message has been 
 Add to your dependencies in your `project.clj`:
 
 ```clojure
-[kafka-component "0.2.6"]
+[kafka-component "0.2.7"]
 ```
 
 # Usage
