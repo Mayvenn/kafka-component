@@ -1,80 +1,92 @@
 (ns kafka-component.core
   (:require [com.stuartsierra.component :as component]
-            [clj-kafka.consumer.zk :refer [consumer shutdown messages]]
-            [clj-kafka.producer :refer [producer]])
-  (:import [java.util.concurrent Executors TimeUnit]))
+            [gregor.core :as gregor])
+  (:import [java.util.concurrent Executors TimeUnit]
+           [org.apache.kafka.common.errors WakeupException]))
 
-(defn ^:private consume-messages-task
-  [logger exception-handler shutting-down message-consumer topic thread-id kafka-consumer]
-  (fn []
-    (try
-      (logger :info (str "consumer thread " thread-id " starting"))
+(def default-consumer-config
+  {"enable.auto.commit"	"false"
+   "max.poll.records" "1"})
 
-      (doseq [m (messages kafka-consumer topic)]
-        (logger :info (str "thread " thread-id " received message with key: " (String. (:key m))))
-        (try
-          (message-consumer m)
+(def default-producer-config
+  {"acks" "all"
+   "retries" "3"
+   "max.in.flight.requests.per.connection" "1"})
 
-          ;; separate try/catch for committing offsets since the kafka consumer could have been shut down
-          ;; and when the kafka consumer shuts down, it nils out its internal ZK client which causes null pointers
-          ;; and other related problems. Thus, we specially catch this exception and only report it if we're not
-          ;; shutting down. This solution is a bit simpler/less complex albeit not necessarily as clean as if we
-          ;; ourselves polled for messages and only shut down consumers after the thread has cleanly exited.
+(defrecord ConsumerTask [logger exception-handler message-consumer kafka-config topics-or-regex consumer-atom task-id]
+  java.lang.Runnable
+  (run [_]
+    (let [kafka-consumer (gregor/consumer (kafka-config "bootstrap.servers")
+                                          (kafka-config "group.id")
+                                          topics-or-regex
+                                          kafka-config)
+          log-exception  (fn log-exception [e & msg]
+                           (logger :error (apply str "task-id=" task-id " msg=" msg))
+                           (logger :error e)
+                           (exception-handler e))
+          log            (fn log [& msg]
+                           (logger :info (apply str "task-id=" task-id " msg=" msg)))]
+
+      (reset! consumer-atom kafka-consumer)
+      (try
+        (log "starting")
+
+        (doseq [{:keys [topic partition offset key] :as record} (gregor/records kafka-consumer)]
+          (log "received message with key: " key)
           (try
-            (.commitOffsets kafka-consumer)
+            (message-consumer record)
+            (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
             (catch Exception e
-              (when-not @shutting-down
-                (logger :error (str "failed to commit offsets in thread " thread-id))
-                (logger :error e)
-                (exception-handler e))))
+              (log-exception e "error in message consumer"))))
 
-          (catch Exception e
-            (logger :error (str "error in consumer thread " thread-id))
-            (logger :error e)
-            (exception-handler e))))
+        (log "exiting")
+        (catch WakeupException e (log "woken up"))
+        (catch Exception e (log-exception e "error in kafka consumer task runnable"))
+        (finally
+          (log "closing kafka consumer")
+          (gregor/close kafka-consumer)))))
 
-      (logger :info (str "consumer thread " thread-id " exiting"))
-      (catch Exception e
-        (logger :error (str "thread " thread-id " errored on consuming messages"))
-        (logger :error e)
-        (exception-handler e)))))
+  java.io.Closeable
+  (close [_]
+    (gregor/wakeup @consumer-atom)))
 
-(defrecord KafkaConsumerPool [config pool-size topic consumer-component logger exception-handler]
+(defn create-task-pool [{:keys [config pool-size topics-or-regex consumer-component logger exception-handler] :as c}]
+  (let [thread-pool (Executors/newFixedThreadPool pool-size)
+        task-ids    (map (partial str pool-id "-") (range pool-size))
+        create-task (partial ->ConsumerTask logger exception-handler (:consumer consumer-component)
+                              (config :kafka-consumer-config) topics-or-regex (atom nil))
+        tasks       (map create-task task-ids)]
+    (doseq [t tasks] (.submit thread-pool t))
+    (merge c {:thread-pool thread-pool :tasks tasks})))
+
+(defn stop-task-pool [{:keys [thread-pool tasks] :as c}]
+  (doseq [t tasks] (.close t))
+  (when thread-pool
+    (.shutdown thread-pool)
+    (.awaitTermination thread-pool (config :shutdown-grace-period 4) TimeUnit/SECONDS))
+  (dissoc c :thread-pool :tasks))
+
+(defrecord KafkaCommitAlwaysPool [config pool-size topics-or-regex consumer-component logger exception-handler]
   component/Lifecycle
   (start [c]
-    (logger :info (str "starting " topic " consumption"))
-    (let [shutting-down (atom false)
-          thread-pool (Executors/newFixedThreadPool pool-size)
-          kafka-consumers (repeatedly pool-size #(consumer (config :kafka-consumer-config)))
-          tasks (map (partial consume-messages-task logger exception-handler shutting-down (:consumer consumer-component) topic)
-                     (map (partial str topic "-") (range))
-                     kafka-consumers)]
-      (doseq [t tasks] (.submit thread-pool t))
-      (logger :info (str "started " topic " consumption"))
-      (merge c {:thread-pool thread-pool :kafka-consumers kafka-consumers :shutting-down shutting-down})))
-  (stop [{:keys [logger thread-pool kafka-consumers shutting-down] :or {logger :noop} :as c}]
-    (reset! shutting-down true)
-    (logger :info (str "stopping " topic " consumption"))
-    ;; shutting down consumers in parallel seems to cause less rebalances and shuts down more quickly
-    ;; eventually, when offset committing is more granular, it'll be way nicer to only have one consumer
-    ;; for all the threads
-    (doall (pmap shutdown kafka-consumers))
-    (when thread-pool
-      (.shutdown thread-pool)
-      (.awaitTermination thread-pool (config :shutdown-grace-period) TimeUnit/SECONDS)
-    (logger :info (str "stopped " topic " consumption"))
-    c)))
+    (let [pool-id (pr-str topics-or-regex)]
+      (logger :info (str "pool-id=" pool-id " msg=starting consumption"))
+      (let [initialized-component (create-task-pool c)]
+        (logger :info (str "pool-id=" pool-id " msg=started consumption"))
+        initialized-component)))
 
-(def kafka-producer-config
-  {"serializer.class" "kafka.serializer.StringEncoder"
-   "request.required.acks" "-1"
-   "partitioner.class" "kafka.producer.DefaultPartitioner"})
+  (stop [{:keys [logger] :as c}]
+    (let [pool-id (pr-str topics-or-regex)]
+      (logger :info (str "pool-id=" pool-id " msg=stopping consumption"))
+      (let [deinitialized-component (stop-task-pool c)]
+        (logger :info (str "pool-id=" pool-id " msg=stopped consumption"))
+        deinitialized-component))))
 
 (defrecord KafkaProducer [config]
   component/Lifecycle
   (start [c]
-    (assoc c :producer (producer (merge kafka-producer-config config))))
+    (assoc c :producer (gregor/producer (config "bootstrap.servers") (merge default-producer-config config))))
   (stop [c]
     (when-let [p (:producer c)]
-      (.close p)
+      (gregor/close p 2) ;; 2 seconds to wait to send remaining messages, should this be configurable?
       (dissoc c :producer))))

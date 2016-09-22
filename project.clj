@@ -6,4 +6,4 @@
   :deploy-repositories [["releases" :clojars]]
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [com.stuartsierra/component "0.2.2"]
-                 [clj-kafka "0.3.2"]])
+                 [io.weft/gregor "0.5.1"]])
