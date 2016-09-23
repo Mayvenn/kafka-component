@@ -31,13 +31,15 @@
       (try
         (log "starting")
 
-        (doseq [{:keys [topic partition offset key] :as record} (gregor/records kafka-consumer)]
-          (log "received message with key: " key)
-          (try
-            (message-consumer record)
-            (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
-            (catch Exception e
-              (log-exception e "error in message consumer"))))
+        (while true
+          (doseq [{:keys [topic partition offset key] :as record} (gregor/poll kafka-consumer)]
+            (log "received message with key: " key)
+            (try
+              (message-consumer record)
+              (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
+              (catch WakeupException e (throw e))
+              (catch Exception e
+                (log-exception e "error in message consumer")))))
 
         (log "exiting")
         (catch WakeupException e (log "woken up"))
@@ -50,7 +52,7 @@
   (close [_]
     (gregor/wakeup @consumer-atom)))
 
-(defn create-task-pool [{:keys [config pool-size topics-or-regex consumer-component logger exception-handler] :as c}]
+(defn create-task-pool [{:keys [config pool-size topics-or-regex consumer-component logger exception-handler] :as c} pool-id]
   (let [thread-pool (Executors/newFixedThreadPool pool-size)
         task-ids    (map (partial str pool-id "-") (range pool-size))
         create-task (partial ->ConsumerTask logger exception-handler (:consumer consumer-component)
@@ -59,7 +61,7 @@
     (doseq [t tasks] (.submit thread-pool t))
     (merge c {:thread-pool thread-pool :tasks tasks})))
 
-(defn stop-task-pool [{:keys [thread-pool tasks] :as c}]
+(defn stop-task-pool [{:keys [config thread-pool tasks] :as c}]
   (doseq [t tasks] (.close t))
   (when thread-pool
     (.shutdown thread-pool)
@@ -71,7 +73,7 @@
   (start [c]
     (let [pool-id (pr-str topics-or-regex)]
       (logger :info (str "pool-id=" pool-id " msg=starting consumption"))
-      (let [initialized-component (create-task-pool c)]
+      (let [initialized-component (create-task-pool c pool-id)]
         (logger :info (str "pool-id=" pool-id " msg=started consumption"))
         initialized-component)))
 

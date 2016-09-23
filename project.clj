@@ -6,4 +6,14 @@
   :deploy-repositories [["releases" :clojars]]
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [com.stuartsierra/component "0.2.2"]
-                 [io.weft/gregor "0.5.1"]])
+                 [io.weft/gregor "0.5.1"]]
+  :profiles
+  {:uberjar {:aot :all}
+   :dev {:source-paths ["dev"]
+         :dependencies [[diff-eq "0.2.2"]
+                        [standalone-test-server "0.5.0"]
+                        [org.clojure/tools.namespace "0.2.9"]
+                        [embedded-kafka "0.4.0-SNAPSHOT"]]
+         :plugins [[lein-cljfmt "0.3.0"]]
+         :injections [(require 'diff-eq.core)
+                      (diff-eq.core/diff!)]}} )
