@@ -1,10 +1,10 @@
 (ns kafka-component.mock
   (:require [com.stuartsierra.component :as component]
             [gregor.core :as gregor]
-            [clojure.core.async :as async :refer :all]
+            [clojure.core.async :as async :refer [>!! alt!! chan timeout admix mix <!!]]
             [kafka-component.core :as core])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
-           [org.apache.kafka.clients.consumer Consumer ConsumerRecord]
+           [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
            [org.apache.kafka.common TopicPartition]
            [java.util Collection]
            [java.util.regex Pattern]))
@@ -14,6 +14,7 @@
 ;;                  :registered-consumers []}}
 (def broker-state (atom {}))
 (def broker-lock (Object.))
+(def buffer-size 20)
 
 (defn reset-broker-state! []
   (locking broker-lock
@@ -35,7 +36,11 @@
     (update-in state [topic :registered-subscribers] conj subscriber)
     (assoc state topic (initial-topic-with-subscriber subscriber))))
 
+(defn record->topic-partition [record]
+  (TopicPartition. (.topic record) (.partition record)))
 
+;; TODO: implement missing methods
+;; TODO: validate config?
 (defrecord MockConsumer [consumer-state config]
   Consumer
   (assign [_ partitions])
@@ -52,25 +57,31 @@
   (pause [_ partitions])
   (paused [_])
   (poll [_ max-timeout]
+    ;; TODO: more than one record polled
+    ;; TODO: wakeup on poll
+    ;; TODO: on timeout is it empty ConsumerRecords or nil?
     (alt!!
-      (:msg-mix @consumer-state) ([msg] [msg])
-      (timeout max-timeout) ([_] nil)
-      ))
+      (:msg-chan @consumer-state) ([msg] (ConsumerRecords. {(record->topic-partition msg) [msg]}))
+      (timeout max-timeout) ([_] nil)))
   (position [_ partition])
   (resume [_ partitions])
   (seek [_ partition offset])
   (seekToBeginning [_ partitions])
   (seekToEnd [_ partitions])
   (subscribe [_ topics]
+    ;; TODO: what if already subscribed, what does Kafka do?
     (doseq [topic topics]
-      (let [msg-chan (chan 10)]
-        (admix (:msg-mix @consumer-state) msg-chan)
-        (add-subscriber-in-broker-state broker-state topic msg-chan))))
+      (let [topic-chan (chan buffer-size)]
+        (admix (:msg-mixer @consumer-state) topic-chan)
+        (swap! broker-state add-subscriber-in-broker-state topic topic-chan))))
   (unsubscribe [_])
   (wakeup [_]))
 
 (defn make-mock-kafka-consumer [config]
-  (->MockConsumer (atom {:msg-mix (mix (chan 10))}) config))
+  (let [msg-chan  (chan buffer-size)]
+    (->MockConsumer (atom {:msg-mixer (mix msg-chan)
+                           :msg-chan  msg-chan})
+                    config)))
 
 (defn mock-consumer-task [{:keys [config logger exception-handler consumer-component]} task-id]
   (core/->ConsumerAlwaysCommitTask logger exception-handler (:consumer consumer-component)
@@ -101,7 +112,8 @@
           offset (count (get-in @broker-state [topic :messages]))
           consumer-record (producer-record->consumer-record offset record)
           state-with-record (swap! broker-state add-record-in-broker-state consumer-record)]
-      (doseq [subscriber (:registered-subscribers state-with-record)]
+      (doseq [subscriber (get-in state-with-record [topic :registered-subscribers])]
+        (prn subscriber)
         (>!! subscriber consumer-record))
       consumer-record)))
 
@@ -111,10 +123,9 @@
     (onCompletion [this record-metadata e])))
 
 (defn committed-record-metadata [record]
-  (let [topic-partition (TopicPartition. (.topic record) (.partition record))]
-    (RecordMetadata. topic-partition 0 (.offset record)
-                     (.timestamp record) (.checksum record)
-                     (.serializedKeySize record) (.serializedValueSize record))))
+  (RecordMetadata. (record->topic-partition record) 0 (.offset record)
+                   (.timestamp record) (.checksum record)
+                   (.serializedKeySize record) (.serializedValueSize record)))
 
 
 (defrecord MockProducer [producer-state config]
@@ -146,6 +157,11 @@
   @res
 
   @broker-state
+
+  (def consumer (make-mock-kafka-consumer {}))
+
+  (.subscribe consumer ["test-topic"])
+  (.poll consumer 10000)
 
 
   )
