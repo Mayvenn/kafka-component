@@ -4,9 +4,10 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :deploy-repositories [["releases" :clojars]]
-  :dependencies [[org.clojure/clojure "1.7.0"]
+  :dependencies [[org.clojure/clojure "1.8.0"]
                  [com.stuartsierra/component "0.2.2"]
-                 [io.weft/gregor "0.5.1"]]
+                 [io.weft/gregor "0.5.1"]
+                 [org.clojure/core.async "0.2.391"]]
   :profiles
   {:uberjar {:aot :all}
    :dev {:source-paths ["dev"]

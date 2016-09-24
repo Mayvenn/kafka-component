@@ -8,18 +8,23 @@
   {"enable.auto.commit"	"false"
    "max.poll.records" "1"})
 
+(defn make-default-consumer [topics-or-regex kafka-config]
+  (gregor/consumer (kafka-config "bootstrap.servers") (kafka-config "group.id")
+                   topics-or-regex kafka-config))
+
 (def default-producer-config
   {"acks" "all"
    "retries" "3"
    "max.in.flight.requests.per.connection" "1"})
 
-(defrecord ConsumerTask [logger exception-handler message-consumer kafka-config topics-or-regex consumer-atom task-id]
+(defn make-default-producer [config]
+  (gregor/producer (config "bootstrap.servers")
+                   (merge default-producer-config config)))
+
+(defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-kafka-consumer consumer-atom task-id]
   java.lang.Runnable
   (run [_]
-    (let [kafka-consumer (gregor/consumer (kafka-config "bootstrap.servers")
-                                          (kafka-config "group.id")
-                                          topics-or-regex
-                                          kafka-config)
+    (let [kafka-consumer ((or make-kafka-consumer make-default-consumer) kafka-config)
           log-exception  (fn log-exception [e & msg]
                            (logger :error (apply str "task-id=" task-id " msg=" msg))
                            (logger :error e)
@@ -52,12 +57,20 @@
   (close [_]
     (gregor/wakeup @consumer-atom)))
 
-(defn create-task-pool [{:keys [config pool-size topics-or-regex consumer-component logger exception-handler] :as c} pool-id]
-  (let [thread-pool (Executors/newFixedThreadPool pool-size)
+(defn make-default-task [{:keys [logger exception-handler consumer-component config]} task-id]
+  (->ConsumerAlwaysCommitTask logger
+                              exception-handler
+                              (:consumer consumer-component)
+                              (config :kafka-consumer-config)
+                              (partial make-default-consumer (config :topics-or-regex))
+                              (atom nil)
+                              task-id))
+
+(defn create-task-pool [{:keys [config make-consumer-task] :as c} pool-id]
+  (let [pool-size (:pool-size config)
+        thread-pool (Executors/newFixedThreadPool pool-size)
         task-ids    (map (partial str pool-id "-") (range pool-size))
-        create-task (partial ->ConsumerTask logger exception-handler (:consumer consumer-component)
-                              (config :kafka-consumer-config) topics-or-regex (atom nil))
-        tasks       (map create-task task-ids)]
+        tasks       (map (partial (or make-consumer-task make-default-task) c) task-ids)]
     (doseq [t tasks] (.submit thread-pool t))
     (merge c {:thread-pool thread-pool :tasks tasks})))
 
@@ -68,26 +81,26 @@
     (.awaitTermination thread-pool (config :shutdown-grace-period 4) TimeUnit/SECONDS))
   (dissoc c :thread-pool :tasks))
 
-(defrecord KafkaCommitAlwaysPool [config pool-size topics-or-regex consumer-component logger exception-handler]
+(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task]
   component/Lifecycle
   (start [c]
-    (let [pool-id (pr-str topics-or-regex)]
+    (let [pool-id (pr-str (:topics-or-regex config))]
       (logger :info (str "pool-id=" pool-id " msg=starting consumption"))
       (let [initialized-component (create-task-pool c pool-id)]
         (logger :info (str "pool-id=" pool-id " msg=started consumption"))
         initialized-component)))
 
   (stop [{:keys [logger] :as c}]
-    (let [pool-id (pr-str topics-or-regex)]
+    (let [pool-id (pr-str (:topics-or-regex config))]
       (logger :info (str "pool-id=" pool-id " msg=stopping consumption"))
       (let [deinitialized-component (stop-task-pool c)]
         (logger :info (str "pool-id=" pool-id " msg=stopped consumption"))
         deinitialized-component))))
 
-(defrecord KafkaProducer [config]
+(defrecord KafkaProducerComponent [config make-kafka-producer]
   component/Lifecycle
   (start [c]
-    (assoc c :producer (gregor/producer (config "bootstrap.servers") (merge default-producer-config config))))
+    (assoc c :producer ((or make-kafka-producer make-default-producer) config)))
   (stop [c]
     (when-let [p (:producer c)]
       (gregor/close p 2) ;; 2 seconds to wait to send remaining messages, should this be configurable?

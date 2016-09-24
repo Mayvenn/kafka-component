@@ -11,14 +11,15 @@
      (component/system-map
       :messages messages
       :message-consumer {:consumer (partial deliver messages)}
-      :producer-component (->KafkaProducer ek/kafka-config)
-      :consumer-component (->KafkaCommitAlwaysPool
-                           {:kafka-consumer-config ek/kafka-config}
-                           1
-                           ["test-topic"]
+      :producer-component (->KafkaProducerComponent ek/kafka-config nil)
+      :consumer-component (->KafkaConsumerPool
+                           {:kafka-consumer-config ek/kafka-config
+                            :topics-or-regex ["test-topic"]
+                            :pool-size 1}
                            {}
                            println
-                           println))
+                           println
+                           nil))
      {:consumer-component {:consumer-component :message-consumer}})))
 
 (defmacro with-resource
