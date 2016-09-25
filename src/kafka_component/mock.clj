@@ -20,6 +20,10 @@
   (locking broker-lock
     (reset! broker-state {})))
 
+(defn fixture-reset-broker-state! [f]
+  (reset-broker-state!)
+  (f))
+
 (defn initial-topic-with-subscriber [initial-subscriber]
   {:messages []
    :registered-subscribers [initial-subscriber]})
@@ -60,9 +64,9 @@
   (poll [_ max-timeout]
     ;; TODO: more than one record polled
     ;; TODO: wakeup on poll
-    ;; TODO: on timeout is it empty ConsumerRecords or nil?
+    ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
     ;; TODO: use consumer offset and reset largest/smallest to figure out records
-    ;; TODO: what does kafka do if not subscribed to any topics?
+    ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
     (alt!!
       (:msg-chan @consumer-state) ([msg] (ConsumerRecords. {(record->topic-partition msg) [msg]}))
       (timeout max-timeout) ([_] nil)))
@@ -85,7 +89,7 @@
       (unmix (:msg-mixer @consumer-state) topic-chan)))
   (wakeup [_]))
 
-(defn make-mock-kafka-consumer [config]
+(defn mock-consumer [config]
   (let [msg-chan  (chan buffer-size)]
     (->MockConsumer (atom {:msg-mixer (mix msg-chan)
                            :msg-chan  msg-chan
@@ -95,7 +99,7 @@
 (defn mock-consumer-task [{:keys [config logger exception-handler consumer-component]} task-id]
   (core/->ConsumerAlwaysCommitTask logger exception-handler (:consumer consumer-component)
                                    (config :kafka-consumer-config) (config :topics-or-regex)
-                                   make-mock-kafka-consumer (atom nil) task-id))
+                                   mock-consumer (atom nil) task-id))
 
 (defn mock-consumer-pool [config]
   (core/map->KafkaConsumerPool {:config config
@@ -121,6 +125,7 @@
           offset (count (get-in @broker-state [topic :messages]))
           consumer-record (producer-record->consumer-record offset record)
           state-with-record (swap! broker-state add-record-in-broker-state consumer-record)]
+      (prn offset)
       (doseq [subscriber (get-in state-with-record [topic :registered-subscribers])]
         (prn subscriber)
         (>!! subscriber consumer-record))
@@ -155,28 +160,8 @@
       (.onCompletion cb record-metadata nil)
       (future record-metadata))))
 
+(defn mock-producer [config]
+  (->MockProducer (atom nil) config))
+
 (defn mock-producer-component [config]
-  (core/->KafkaProducerComponent config (partial ->MockProducer (atom nil))))
-
-(comment
-  (def producer (->MockProducer {} (atom nil)))
-
-  (def res (gregor/send producer "test-topic" "key" "value2"))
-  (def res (gregor/send producer "other-test-topic" "key" "value2"))
-
-  @res
-
-  @broker-state
-
-  (def consumer (make-mock-kafka-consumer {}))
-
-  (.subscribe consumer ["test-topic" "other-test-topic"])
-  (.poll consumer 1000)
-
-  consumer
-  (:consumer-state consumer)
-
-  (.unsubscribe consumer)
-
-
-  )
+  (core/->KafkaProducerComponent config mock-producer))
