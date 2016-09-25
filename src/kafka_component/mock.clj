@@ -1,7 +1,7 @@
 (ns kafka-component.mock
   (:require [com.stuartsierra.component :as component]
             [gregor.core :as gregor]
-            [clojure.core.async :as async :refer [>!! alt!! chan timeout admix mix <!!]]
+            [clojure.core.async :as async :refer [>!! alt!! chan timeout admix mix unmix <!!]]
             [kafka-component.core :as core])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
@@ -41,6 +41,7 @@
 
 ;; TODO: implement missing methods
 ;; TODO: validate config?
+;; TODO: instead of registered topics, it may be easier to have topicpartitions for pause
 (defrecord MockConsumer [consumer-state config]
   Consumer
   (assign [_ partitions])
@@ -60,6 +61,8 @@
     ;; TODO: more than one record polled
     ;; TODO: wakeup on poll
     ;; TODO: on timeout is it empty ConsumerRecords or nil?
+    ;; TODO: use consumer offset and reset largest/smallest to figure out records
+    ;; TODO: what does kafka do if not subscribed to any topics?
     (alt!!
       (:msg-chan @consumer-state) ([msg] (ConsumerRecords. {(record->topic-partition msg) [msg]}))
       (timeout max-timeout) ([_] nil)))
@@ -73,14 +76,20 @@
     (doseq [topic topics]
       (let [topic-chan (chan buffer-size)]
         (admix (:msg-mixer @consumer-state) topic-chan)
+        (swap! consumer-state update :subscribed-topics conj {:topic topic :chan topic-chan})
         (swap! broker-state add-subscriber-in-broker-state topic topic-chan))))
-  (unsubscribe [_])
+  (unsubscribe [_]
+    (doseq [{:keys [topic topic-chan] :as subscription} (:subscribed-topics @consumer-state)]
+      (swap! broker-state update-in [topic :registered-subscribers] remove topic-chan)
+      (swap! consumer-state update :subscribed-topics remove subscription)
+      (unmix (:msg-mixer @consumer-state) topic-chan)))
   (wakeup [_]))
 
 (defn make-mock-kafka-consumer [config]
   (let [msg-chan  (chan buffer-size)]
     (->MockConsumer (atom {:msg-mixer (mix msg-chan)
-                           :msg-chan  msg-chan})
+                           :msg-chan  msg-chan
+                           :subscribed-topics []})
                     config)))
 
 (defn mock-consumer-task [{:keys [config logger exception-handler consumer-component]} task-id]
@@ -153,6 +162,7 @@
   (def producer (->MockProducer {} (atom nil)))
 
   (def res (gregor/send producer "test-topic" "key" "value2"))
+  (def res (gregor/send producer "other-test-topic" "key" "value2"))
 
   @res
 
@@ -160,8 +170,13 @@
 
   (def consumer (make-mock-kafka-consumer {}))
 
-  (.subscribe consumer ["test-topic"])
-  (.poll consumer 10000)
+  (.subscribe consumer ["test-topic" "other-test-topic"])
+  (.poll consumer 1000)
+
+  consumer
+  (:consumer-state consumer)
+
+  (.unsubscribe consumer)
 
 
   )
