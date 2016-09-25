@@ -53,18 +53,30 @@
    :offset    (.offset record)})
 
 (defn records->clj [consumer-records topic]
-  (map record->clj (iterator-seq (.iterator (.records consumer-records topic)))))
+  (if consumer-records
+    (map record->clj (iterator-seq (.iterator (.records consumer-records topic))))
+    []))
 
 (defn create-mocks []
   [(mock-producer {}) (mock-consumer {})])
 
-(deftest consumer-can-receive-sent-message-after-subscribing
+(deftest consumer-can-receive-message-sent-after-subscribing
   (let [[producer consumer] (create-mocks)
         _ (.subscribe consumer ["topic"])
         _ (.send producer (producer-record "topic" "key" "value"))
         consumer-records (.poll consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
            (records->clj consumer-records "topic")))))
+
+(comment
+  (deftest consumer-can-receive-message-sent-before-subscribing
+    (let [producer (mock-producer {})
+          consumer (mock-consumer {"auto.offset.reset" "earliest"})
+          _ (.send producer (producer-record "topic" "key" "value"))
+          _ (.subscribe consumer ["topic"])
+          consumer-records (.poll consumer timeout)]
+      (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
+             (records->clj consumer-records "topic"))))))
 
 ;; TODO: simplify when max.poll.records works
 (deftest consumer-can-receive-messages-from-multiple-topics
