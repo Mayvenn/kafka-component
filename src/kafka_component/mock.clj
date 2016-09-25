@@ -15,6 +15,7 @@
 (def broker-state (atom {}))
 (def broker-lock (Object.))
 (def buffer-size 20)
+(def default-num-partitions 2)
 
 (defn reset-broker-state! []
   (locking broker-lock
@@ -24,21 +25,33 @@
   (reset-broker-state!)
   (f))
 
-(defn initial-topic-with-subscriber [initial-subscriber]
-  {:messages []
-   :registered-subscribers [initial-subscriber]})
+(defn create-topic
+  ([] (create-topic default-num-partitions))
+  ([num-partitions]
+   (into [] (repeatedly num-partitions (constantly {:messages [] :registered-subscribers []})))))
 
-(defn initial-topic-with-message [initial-message]
-  {:messages [initial-message]
-   :registered-subscribers []})
+(defn ensure-topic [broker-state topic]
+  (if (broker-state topic)
+    broker-state
+    (assoc broker-state topic (create-topic))))
 
 (defn close-mock [state]
   (assoc state :conn-open? false))
 
+(defn add-subscriber-to-partition [subscriber partition]
+  (update partition :registered-subscribers conj subscriber))
+
+(defn remove-subscriber-from-partition [subscriber partition]
+  (update partition :registered-subscribers remove subscriber))
+
 (defn add-subscriber-in-broker-state [state topic subscriber]
-  (if (state topic)
-    (update-in state [topic :registered-subscribers] conj subscriber)
-    (assoc state topic (initial-topic-with-subscriber subscriber))))
+  (-> state
+      (ensure-topic topic)
+      ;; TODO: Add subscriber to every partition for now, needs to rebalance according to consumer group
+      (update topic #(into [] (map (partial add-subscriber-to-partition subscriber) %)))))
+
+(defn remove-subscriber-from-topic [state subscriber topic]
+  (update state topic #(into [] (map (partial remove-subscriber-from-partition subscriber) %))))
 
 (defn record->topic-partition [record]
   (TopicPartition. (.topic record) (.partition record)))
@@ -77,16 +90,18 @@
   (seekToEnd [_ partitions])
   (subscribe [_ topics]
     ;; TODO: what if already subscribed, what does Kafka do?
-    (doseq [topic topics]
-      (let [topic-chan (chan buffer-size)]
-        (admix (:msg-mixer @consumer-state) topic-chan)
-        (swap! consumer-state update :subscribed-topics conj {:topic topic :chan topic-chan})
-        (swap! broker-state add-subscriber-in-broker-state topic topic-chan))))
+    (locking broker-lock
+      (doseq [topic topics]
+        (let [topic-chan (chan buffer-size)]
+          (admix (:msg-mixer @consumer-state) topic-chan)
+          (swap! consumer-state update :subscribed-topics conj {:topic topic :chan topic-chan})
+          (swap! broker-state add-subscriber-in-broker-state topic topic-chan)))))
   (unsubscribe [_]
-    (doseq [{:keys [topic topic-chan] :as subscription} (:subscribed-topics @consumer-state)]
-      (swap! broker-state update-in [topic :registered-subscribers] remove topic-chan)
-      (swap! consumer-state update :subscribed-topics remove subscription)
-      (unmix (:msg-mixer @consumer-state) topic-chan)))
+    (locking broker-lock
+      (doseq [{:keys [topic topic-chan] :as subscription} (:subscribed-topics @consumer-state)]
+        (swap! broker-state remove-subscriber-from-topic topic-chan topic)
+        (unmix (:msg-mixer @consumer-state) topic-chan))
+      (swap! consumer-state assoc :subscribed-topics [])))
   (wakeup [_]))
 
 (defn mock-consumer [config]
@@ -115,17 +130,17 @@
 
 (defn add-record-in-broker-state [state consumer-record]
   (let [topic (.topic consumer-record)]
-    (if (state topic)
-      (update-in state [topic :messages] conj consumer-record)
-      (assoc state topic (initial-topic-with-message consumer-record)))))
+    (-> state
+        (ensure-topic topic)
+        (update-in [topic (.partition consumer-record) :messages] conj consumer-record))))
 
 (defn save-record! [record]
   (locking broker-lock
     (let [topic (.topic record)
-          offset (count (get-in @broker-state [topic :messages]))
+          offset (count (get-in @broker-state [topic (or (.partition record) 0) :messages]))
           consumer-record (producer-record->consumer-record offset record)
           state-with-record (swap! broker-state add-record-in-broker-state consumer-record)]
-      (doseq [subscriber (get-in state-with-record [topic :registered-subscribers])]
+      (doseq [subscriber (get-in state-with-record [topic (.partition consumer-record) :registered-subscribers])]
         (>!! subscriber consumer-record))
       consumer-record)))
 

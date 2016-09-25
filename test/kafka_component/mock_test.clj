@@ -13,7 +13,8 @@
 
 (defn producer-record
   ([] (producer-record "topic" "key" "value"))
-  ([topic k v] (ProducerRecord. topic k v)))
+  ([topic k v] (ProducerRecord. topic k v))
+  ([topic k v partition] (ProducerRecord. topic (int partition) k v)))
 
 (defn reify-send-callback [cb]
   (reify Callback
@@ -67,6 +68,18 @@
         consumer-records (.poll consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
            (records->clj consumer-records "topic")))))
+
+(deftest consumer-can-receive-message-from-different-partitions
+  (let [[producer consumer] (create-mocks)
+        _ (.subscribe consumer ["topic"])
+        _ (.send producer (producer-record "topic" "key" "value" 0))
+        _ (.send producer (producer-record "topic" "key" "value" 1))
+        first-consumer-records (.poll consumer timeout)
+        second-consumer-records (.poll consumer timeout)]
+    (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
+           (records->clj first-consumer-records "topic"))
+        (= [{:value "value" :key "key" :partition 1 :topic "topic" :offset 0}]
+           (records->clj second-consumer-records "topic")))))
 
 (comment
   (deftest consumer-can-receive-message-sent-before-subscribing
