@@ -125,9 +125,7 @@
           offset (count (get-in @broker-state [topic :messages]))
           consumer-record (producer-record->consumer-record offset record)
           state-with-record (swap! broker-state add-record-in-broker-state consumer-record)]
-      (prn offset)
       (doseq [subscriber (get-in state-with-record [topic :registered-subscribers])]
-        (prn subscriber)
         (>!! subscriber consumer-record))
       consumer-record)))
 
