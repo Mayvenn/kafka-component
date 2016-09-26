@@ -114,7 +114,7 @@
         messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (sort-by :value messages)))))
+           (sort-by :topic messages)))))
 
 (deftest consumer-can-unsubscribe-from-topics
   (let [[producer consumer] (create-mocks)
