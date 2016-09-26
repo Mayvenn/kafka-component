@@ -53,10 +53,14 @@
    :topic     (.topic record)
    :offset    (.offset record)})
 
-(defn records->clj [consumer-records topic]
-  (if consumer-records
-    (map record->clj (iterator-seq (.iterator (.records consumer-records topic))))
-    []))
+(defn records->clj
+  ([consumer-records]
+   (if consumer-records
+     (map record->clj (iterator-seq (.iterator consumer-records)))
+     [])))
+
+(defn get-messages [consumer timeout]
+  (records->clj (.poll consumer timeout)))
 
 (defn create-mocks []
   [(mock-producer {}) (mock-consumer {})])
@@ -65,21 +69,30 @@
   (let [[producer consumer] (create-mocks)
         _ (.subscribe consumer ["topic"])
         _ (.send producer (producer-record "topic" "key" "value"))
-        consumer-records (.poll consumer timeout)]
+        messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (records->clj consumer-records "topic")))))
+           messages))))
 
 (deftest consumer-can-receive-message-from-different-partitions
   (let [[producer consumer] (create-mocks)
         _ (.subscribe consumer ["topic"])
         _ (.send producer (producer-record "topic" "key" "value" 0))
         _ (.send producer (producer-record "topic" "key" "value" 1))
-        first-consumer-records (.poll consumer timeout)
-        second-consumer-records (.poll consumer timeout)]
+        messages (get-messages consumer timeout)]
+    (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
+            {:value "value" :key "key" :partition 1 :topic "topic" :offset 0}]
+           messages))))
+
+(deftest consumer-can-limit-number-of-messages-polled
+  (let [producer (mock-producer {})
+        consumer (mock-consumer {"max.poll.records" "1"})
+        _ (.subscribe consumer ["topic"])
+        _ (.send producer (producer-record "topic" "key" "value"))
+        _ (.send producer (producer-record "topic" "key2" "value2"))]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (records->clj first-consumer-records "topic"))
-        (= [{:value "value" :key "key" :partition 1 :topic "topic" :offset 0}]
-           (records->clj second-consumer-records "topic")))))
+           (get-messages consumer timeout)))
+    (is (= [{:value "value2" :key "key2" :partition 0 :topic "topic" :offset 1}]
+           (get-messages consumer timeout)))))
 
 (comment
   (deftest consumer-can-receive-message-sent-before-subscribing
@@ -87,40 +100,33 @@
           consumer (mock-consumer {"auto.offset.reset" "earliest"})
           _ (.send producer (producer-record "topic" "key" "value"))
           _ (.subscribe consumer ["topic"])
-          consumer-records (.poll consumer timeout)]
+          messages (get-messages consumer timeout)]
       (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-             (records->clj consumer-records "topic"))))))
+             messages)))))
 
-;; TODO: simplify when max.poll.records works
 (deftest consumer-can-receive-messages-from-multiple-topics
   (let [[producer consumer] (create-mocks)
         _ (.subscribe consumer ["topic" "topic2"])
         _ (.send producer (producer-record "topic" "key" "value"))
         _ (.send producer (producer-record "topic2" "key2" "value2"))
-        first-consumer-records (.poll consumer timeout)
-        second-consumer-records (.poll consumer timeout)]
+        messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (concat (records->clj first-consumer-records "topic")
-                   (records->clj second-consumer-records "topic2"))))))
+           messages))))
 
-;; TODO: simplify when max.poll.records works
 (deftest consumer-can-unsubscribe-from-topics
   (let [[producer consumer] (create-mocks)
         _ (.subscribe consumer ["topic" "topic2"])
         _ (.send producer (producer-record "topic" "key" "value"))
         _ (.send producer (producer-record "topic2" "key2" "value2"))
-        first-consumer-records (.poll consumer timeout)
-        second-consumer-records (.poll consumer timeout)
+        subscribed-messages (get-messages consumer timeout)
 
         _ (.unsubscribe consumer)
 
         _ (.send producer (producer-record "topic" "key" "value"))
         _ (.send producer (producer-record "topic2" "key2" "value2"))
-        third-consumer-records (.poll consumer timeout)
-        fourth-consumer-records (.poll consumer timeout)]
+        unsubscribed-messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (concat (records->clj first-consumer-records "topic")
-                   (records->clj second-consumer-records "topic2"))))
-    (is (= [nil nil] [third-consumer-records fourth-consumer-records]))))
+           subscribed-messages))
+    (is (= [] unsubscribed-messages))))

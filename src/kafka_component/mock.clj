@@ -1,11 +1,12 @@
 (ns kafka-component.mock
   (:require [com.stuartsierra.component :as component]
             [gregor.core :as gregor]
-            [clojure.core.async :as async :refer [>!! alt!! chan timeout admix mix unmix <!!]]
+            [clojure.core.async :as async :refer [>!! <!! chan alt!! timeout admix mix unmix poll!]]
             [kafka-component.core :as core])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
            [org.apache.kafka.common TopicPartition]
+           [java.lang Integer]
            [java.util Collection]
            [java.util.regex Pattern]))
 
@@ -56,6 +57,23 @@
 (defn record->topic-partition [record]
   (TopicPartition. (.topic record) (.partition record)))
 
+(defn slurp-messages [msg-chan max-messages messages]
+  (if (< (count messages) max-messages)
+    (if-let [msg (poll! msg-chan)]
+      (slurp-messages msg-chan max-messages (conj messages msg))
+      messages)
+    messages))
+
+(defn ->consumer-records [messages]
+  (ConsumerRecords. (group-by record->topic-partition messages)))
+
+(defn max-poll-records [config]
+  (if-let [max-poll-records-str (config "max.poll.records")]
+    (do
+      (assert String (type max-poll-records-str))
+      (Integer/parseInt max-poll-records-str))
+    Integer/MAX_VALUE))
+
 ;; TODO: implement missing methods
 ;; TODO: validate config?
 ;; TODO: instead of registered topics, it may be easier to have topicpartitions for pause
@@ -75,13 +93,15 @@
   (pause [_ partitions])
   (paused [_])
   (poll [_ max-timeout]
-    ;; TODO: more than one record polled
     ;; TODO: wakeup on poll
     ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
     ;; TODO: use consumer offset and reset largest/smallest to figure out records
     ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
     (alt!!
-      (:msg-chan @consumer-state) ([msg] (ConsumerRecords. {(record->topic-partition msg) [msg]}))
+      (:msg-chan @consumer-state) ([msg] (->> [msg]
+                                              (slurp-messages (:msg-chan @consumer-state)
+                                                              (max-poll-records config))
+                                              ->consumer-records))
       (timeout max-timeout) ([_] nil)))
   (position [_ partition])
   (resume [_ partitions])
