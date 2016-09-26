@@ -83,7 +83,7 @@
         messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value" :key "key" :partition 1 :topic "topic" :offset 0}]
-           messages))))
+           (sort-by :partition messages)))))
 
 (deftest consumer-can-limit-number-of-messages-polled
   (let [producer (mock-producer {})
@@ -114,7 +114,7 @@
         messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           messages))))
+           (sort-by :value messages)))))
 
 (deftest consumer-can-unsubscribe-from-topics
   (let [[producer consumer] (create-mocks)
@@ -130,7 +130,7 @@
         unsubscribed-messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           subscribed-messages))
+           (sort-by :partition subscribed-messages)))
     (is (= [] unsubscribed-messages))))
 
 (defn consume-messages [expected-message-count messages messages-promise msg]
