@@ -10,7 +10,7 @@
 
 (defn make-default-consumer [topics-or-regex kafka-config]
   (gregor/consumer (kafka-config "bootstrap.servers") (kafka-config "group.id")
-                   topics-or-regex kafka-config))
+                   topics-or-regex (merge default-consumer-config kafka-config)))
 
 (def default-producer-config
   {"acks" "all"
