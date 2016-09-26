@@ -124,21 +124,29 @@
       (swap! consumer-state assoc :subscribed-topics [])))
   (wakeup [_]))
 
-(defn mock-consumer [config]
-  (let [msg-chan  (chan buffer-size)]
-    (->MockConsumer (atom {:msg-mixer (mix msg-chan)
-                           :msg-chan  msg-chan
-                           :subscribed-topics []})
-                    config)))
+(defn mock-consumer
+  ([config] (mock-consumer [] config))
+  ([auto-subscribe-topics config]
+   (let [msg-chan  (chan buffer-size)
+         mock-consumer (->MockConsumer (atom {:msg-mixer (mix msg-chan)
+                                              :msg-chan  msg-chan
+                                              :subscribed-topics []})
+                                       (or config {}))]
+     (when (seq auto-subscribe-topics)
+       (.subscribe mock-consumer auto-subscribe-topics))
+     mock-consumer)))
 
 (defn mock-consumer-task [{:keys [config logger exception-handler consumer-component]} task-id]
   (core/->ConsumerAlwaysCommitTask logger exception-handler (:consumer consumer-component)
-                                   (config :kafka-consumer-config) (config :topics-or-regex)
-                                   mock-consumer (atom nil) task-id))
+                                   (config :kafka-consumer-config) (partial mock-consumer (config :topics-or-regex))
+                                   (atom nil) task-id))
 
-(defn mock-consumer-pool [config]
-  (core/map->KafkaConsumerPool {:config config
-                                :make-consumer-task mock-consumer-task}))
+(defn mock-consumer-pool
+  ([config]
+   (core/map->KafkaConsumerPool {:config config
+                                 :make-consumer-task mock-consumer-task}))
+  ([config consumer-component logger exception-handler]
+   (core/->KafkaConsumerPool config consumer-component logger exception-handler mock-consumer-task)))
 
 ;; TODO: assertions
 (defn assert-proper-config [config])

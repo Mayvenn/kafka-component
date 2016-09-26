@@ -1,6 +1,8 @@
 (ns kafka-component.mock-test
   (:require [kafka-component.mock :refer :all]
-            [clojure.test :refer :all])
+            [clojure.test :refer :all]
+            [kafka-component.core-test :refer [with-resource]]
+            [com.stuartsierra.component :as component])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
            [org.apache.kafka.common TopicPartition]
@@ -130,3 +132,31 @@
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
            subscribed-messages))
     (is (= [] unsubscribed-messages))))
+
+(defn consume-messages [expected-message-count messages messages-promise msg]
+  (locking expected-message-count
+    (let [updated-messages (swap! messages conj msg)]
+      (when (>= (count updated-messages) expected-message-count)
+        (deliver messages-promise @messages)))))
+
+(defn new-mock-pool [config expected-message-count received-messages]
+  (mock-consumer-pool (merge {:topics-or-regex []
+                              :pool-size 1
+                              :kafka-config {"auto.offset.reset" "earliest"}} config)
+                      {:consumer (partial consume-messages 2 (atom []) received-messages)}
+                      println println))
+
+;; TODO: remove timeouts after consumers can start from earliest offset
+(deftest consumer-pool-can-be-started-to-consume-messages
+  (let [received-messages (promise)]
+    (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
+                                                                   :pool-size 1}
+                                                                  2 received-messages))]
+      component/stop
+      (let [producer (mock-producer {})
+            _ (Thread/sleep 2000)
+            _ (.send producer (producer-record "topic" "key" "value" 0))
+            _ (.send producer (producer-record "topic" "key2" "value2" 1))]
+        (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
+                {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
+               (sort-by :partition (deref received-messages 5000 []))))))))
