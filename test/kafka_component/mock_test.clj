@@ -11,7 +11,7 @@
 
 (use-fixtures :each fixture-reset-broker-state!)
 
-(def timeout 200)
+(def timeout 500)
 
 (defn producer-record
   ([] (producer-record "topic" "key" "value"))
