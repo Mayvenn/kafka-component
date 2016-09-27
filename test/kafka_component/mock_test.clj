@@ -6,10 +6,11 @@
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
            [org.apache.kafka.common TopicPartition]
+           [org.apache.kafka.common.errors WakeupException]
            [java.util Collection]
            [java.util.regex Pattern]))
 
-(use-fixtures :each fixture-reset-broker-state!)
+(use-fixtures :each fixture-reset-state!)
 
 (def timeout 500)
 
@@ -68,70 +69,108 @@
   [(mock-producer {}) (mock-consumer {})])
 
 (deftest consumer-can-receive-message-sent-after-subscribing
-  (let [[producer consumer] (create-mocks)
-        _ (.subscribe consumer ["topic"])
-        _ (.send producer (producer-record "topic" "key" "value"))
-        messages (get-messages consumer timeout)]
+  (let [[producer consumer] (create-mocks)]
+    (.subscribe consumer ["topic"])
+    @(.send producer (producer-record "topic" "key" "value"))
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           messages))))
+           (get-messages consumer timeout)))))
 
 (deftest consumer-can-receive-message-from-different-partitions
-  (let [[producer consumer] (create-mocks)
-        _ (.subscribe consumer ["topic"])
-        _ (.send producer (producer-record "topic" "key" "value" 0))
-        _ (.send producer (producer-record "topic" "key" "value" 1))
-        messages (get-messages consumer timeout)]
+  (let [[producer consumer] (create-mocks)]
+    (.subscribe consumer ["topic"])
+    @(.send producer (producer-record "topic" "key" "value" 0))
+    @(.send producer (producer-record "topic" "key" "value" 1))
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value" :key "key" :partition 1 :topic "topic" :offset 0}]
-           (sort-by :partition messages)))))
+           (sort-by :partition (get-messages consumer timeout))))))
 
 (deftest consumer-can-limit-number-of-messages-polled
   (let [producer (mock-producer {})
-        consumer (mock-consumer {"max.poll.records" "1"})
-        _ (.subscribe consumer ["topic"])
-        _ (.send producer (producer-record "topic" "key" "value"))
-        _ (.send producer (producer-record "topic" "key2" "value2"))]
+        consumer (mock-consumer {"max.poll.records" "1"})]
+    (.subscribe consumer ["topic"])
+    @(.send producer (producer-record "topic" "key" "value"))
+    @(.send producer (producer-record "topic" "key2" "value2"))
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
            (get-messages consumer timeout)))
     (is (= [{:value "value2" :key "key2" :partition 0 :topic "topic" :offset 1}]
            (get-messages consumer timeout)))))
 
-(comment
-  (deftest consumer-can-receive-message-sent-before-subscribing
-    (let [producer (mock-producer {})
-          consumer (mock-consumer {"auto.offset.reset" "earliest"})
-          _ (.send producer (producer-record "topic" "key" "value"))
-          _ (.subscribe consumer ["topic"])
-          messages (get-messages consumer timeout)]
-      (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-             messages)))))
+(deftest consumer-can-receive-message-sent-before-subscribing
+  (let [producer (mock-producer {})
+        consumer (mock-consumer {"auto.offset.reset" "earliest"})]
+    @(.send producer (producer-record "topic" "key" "value"))
+    (.subscribe consumer ["topic"])
+    (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
+           (get-messages consumer timeout)))))
+
+(deftest consumer-can-use-latest-auto-offset-reset-to-skip-earlier-messages
+  (let [producer (mock-producer {})
+        consumer (mock-consumer {"auto.offset.reset" "latest"})]
+    @(.send producer (producer-record "topic" "key" "value"))
+    (.subscribe consumer ["topic"])
+    @(.send producer (producer-record "topic" "key2" "value2"))
+    (is (= [{:value "value2" :key "key2" :partition 0 :topic "topic" :offset 1}]
+           (get-messages consumer timeout)))))
 
 (deftest consumer-can-receive-messages-from-multiple-topics
-  (let [[producer consumer] (create-mocks)
-        _ (.subscribe consumer ["topic" "topic2"])
-        _ (.send producer (producer-record "topic" "key" "value"))
-        _ (.send producer (producer-record "topic2" "key2" "value2"))
-        messages (get-messages consumer timeout)]
+  (let [[producer consumer] (create-mocks)]
+    (.subscribe consumer ["topic" "topic2"])
+    @(.send producer (producer-record "topic" "key" "value"))
+    @(.send producer (producer-record "topic2" "key2" "value2"))
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (sort-by :topic messages)))))
+           (sort-by :topic (get-messages consumer timeout))))))
+
+(deftest consumer-waits-for-new-messages-to-arrive
+  (let [[producer consumer] (create-mocks)
+        msg-promise (promise)]
+    (.subscribe consumer ["topic"])
+    (future (deliver msg-promise (get-messages consumer (* 2 timeout))))
+    @(.send producer (producer-record))
+    (is (= 1 (count (deref msg-promise timeout []))))))
 
 (deftest consumer-can-unsubscribe-from-topics
   (let [[producer consumer] (create-mocks)
         _ (.subscribe consumer ["topic" "topic2"])
-        _ (.send producer (producer-record "topic" "key" "value"))
-        _ (.send producer (producer-record "topic2" "key2" "value2"))
+        _ @(.send producer (producer-record "topic" "key" "value"))
+        _ @(.send producer (producer-record "topic2" "key2" "value2"))
         subscribed-messages (get-messages consumer timeout)
 
         _ (.unsubscribe consumer)
 
-        _ (.send producer (producer-record "topic" "key" "value"))
-        _ (.send producer (producer-record "topic2" "key2" "value2"))
+        _ @(.send producer (producer-record "topic" "key" "value"))
+        _ @(.send producer (producer-record "topic2" "key2" "value2"))
         unsubscribed-messages (get-messages consumer timeout)]
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
            (sort-by :partition subscribed-messages)))
     (is (= [] unsubscribed-messages))))
+
+(deftest consumer-can-be-woken-up
+  (let [consumer (mock-consumer {})
+        woken (promise)]
+    (.subscribe consumer ["topic"])
+    (future
+      (try
+        (let [res (.poll consumer (* 2 timeout))]
+          (println res))
+        (catch WakeupException e
+          (deliver woken "I'm awake!"))))
+    (.wakeup consumer)
+    (is (= "I'm awake!" (deref woken timeout nil)))))
+
+(deftest consumer-can-be-woken-up-outside-of-poll-and-poll-still-throws-wakeup-exception
+  (let [consumer (mock-consumer {})
+        woken (promise)]
+    (.subscribe consumer ["topic"])
+    (.wakeup consumer)
+    (future
+      (try
+        (let [res (.poll consumer timeout)]
+          (println res))
+        (catch WakeupException e
+          (deliver woken "I'm awake!"))))
+    (is (= "I'm awake!" (deref woken timeout nil)))))
 
 (defn consume-messages [expected-message-count messages messages-promise msg]
   (locking expected-message-count
@@ -142,21 +181,34 @@
 (defn new-mock-pool [config expected-message-count received-messages]
   (mock-consumer-pool (merge {:topics-or-regex []
                               :pool-size 1
-                              :kafka-config {"auto.offset.reset" "earliest"}} config)
-                      {:consumer (partial consume-messages 2 (atom []) received-messages)}
+                              :kafka-config {"auto.offset.reset" "earliest"
+                                             "group.id" "test-group"}} config)
+                      {:consumer (partial consume-messages expected-message-count (atom []) received-messages)}
                       println println))
 
-;; TODO: remove timeouts after consumers can start from earliest offset
 (deftest consumer-pool-can-be-started-to-consume-messages
   (let [received-messages (promise)]
     (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
                                                                    :pool-size 1}
                                                                   2 received-messages))]
       component/stop
-      (let [producer (mock-producer {})
-            _ (Thread/sleep 2000)
-            _ (.send producer (producer-record "topic" "key" "value" 0))
-            _ (.send producer (producer-record "topic" "key2" "value2" 1))]
+      (let [producer (mock-producer {})]
+        @(.send producer (producer-record "topic" "key" "value" 0))
+        @(.send producer (producer-record "topic" "key2" "value2" 1))
         (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
                 {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
                (sort-by :partition (deref received-messages 5000 []))))))))
+
+(comment
+  (deftest multiple-consumers-in-the-same-group-share-the-messages
+    (let [received-messages (promise)]
+      (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
+                                                                     :pool-size 2}
+                                                                    2 received-messages))]
+        component/stop
+        (let [producer (mock-producer {})]
+          @(.send producer (producer-record "topic" "key" "value" 0))
+          @(.send producer (producer-record "topic" "key2" "value2" 1))
+          (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
+                  {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
+                 (sort-by :partition (deref received-messages 5000 [])))))))))
