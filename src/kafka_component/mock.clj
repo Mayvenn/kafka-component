@@ -165,6 +165,8 @@
   (subscribe [this topics]
     ;; TODO: what if already subscribed, what does Kafka do?
     (swap! broker-state #(reduce (fn [state topic] (ensure-topic state topic)) % topics))
+    ;; TODO: there's some pretty gnarly concurrency issues here on how it rebalances while other consumers may be consuming messages
+    ;; kafka wants rebalances only to happen when all consumers are checked in as not processing messages
     (let [group-id (config "group.id" "")
           broker-state @broker-state
           _ (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
