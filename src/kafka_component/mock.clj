@@ -177,7 +177,7 @@
           updated-partition-assignments (swap! partition-assignments rebalance broker-state group-id topics)]
       (doseq [topic topics]
         (doseq [[consumer partitions] (updated-partition-assignments [topic group-id])]
-          (.assign consumer (map #(TopicPartition. topic %) partitions))))))
+          (.assign consumer (map (partial ->topic-partition topic) partitions))))))
   (unsubscribe [_]
     (swap! consumer-state assoc :subscribed-topic-partitions {}))
   (wakeup [_]
