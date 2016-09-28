@@ -3,7 +3,7 @@
             [clojure.core.async :as async :refer [>!! <!! chan alt!! timeout close! poll! go-loop]]
             [kafka-component.core :as core])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
-           [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
+           [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords ConsumerRebalanceListener]
            [org.apache.kafka.common TopicPartition]
            [org.apache.kafka.common.errors WakeupException]
            [java.lang Integer]
@@ -182,7 +182,7 @@
   (seek [_ partition offset])
   (seekToBeginning [_ partitions])
   (seekToEnd [_ partitions])
-  (subscribe [this topics]
+  (^void subscribe [^Consumer this ^Collection topics]
     ;; TODO: what if already subscribed, what does Kafka do?
     (swap! broker-state #(reduce (fn [state topic] (ensure-topic state topic)) % topics))
     ;; TODO: there's some pretty gnarly concurrency issues here on how it rebalances while other consumers may be consuming messages
@@ -190,6 +190,10 @@
     (let [group-id (config "group.id" "")]
       (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
       (rebalance group-id topics)))
+  (^void subscribe [^Consumer this ^Collection topics ^ConsumerRebalanceListener listener]
+   (throw (UnsupportedOperationException.)))
+  (^void subscribe [^Consumer this ^Pattern pattern ^ConsumerRebalanceListener listener]
+   (throw (UnsupportedOperationException.)))
   (unsubscribe [this]
     (let [group-id (config "group.id" "")
           topics (consumer-topics @consumer-state)]
