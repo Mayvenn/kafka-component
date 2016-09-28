@@ -198,9 +198,13 @@
     (swap! consumer-state assoc :woken-up? true)
     (close! (:wakeup-chan @consumer-state))))
 
+(defn logger [& args]
+  (locking println
+    (apply println args)))
+
 (defn mock-consumer
-  ([logger config] (mock-consumer [] logger config))
-  ([auto-subscribe-topics logger config]
+  ([config] (mock-consumer [] config))
+  ([auto-subscribe-topics config]
    (let [mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}
                                               :wakeup-chan (chan)})
                                        logger
@@ -211,7 +215,7 @@
 
 (defn mock-consumer-task [{:keys [config logger exception-handler consumer-component]} task-id]
   (core/->ConsumerAlwaysCommitTask logger exception-handler (:consumer consumer-component)
-                                   (config :kafka-consumer-config) (partial mock-consumer (config :topics-or-regex) logger)
+                                   (config :kafka-consumer-config) (partial mock-consumer (config :topics-or-regex))
                                    (atom nil) task-id))
 
 (defn mock-consumer-pool

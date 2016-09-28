@@ -178,10 +178,6 @@
       (when (>= (count updated-messages) expected-message-count)
         (deliver messages-promise @messages)))))
 
-(defn logger [& args]
-  (locking println
-    (apply println args)))
-
 (defn new-mock-pool [config expected-message-count received-messages]
   (mock-consumer-pool (merge {:topics-or-regex []
                               :pool-size 1
