@@ -29,6 +29,7 @@
 
 (def buffer-size 20)
 (def default-num-partitions 2)
+(def consumer-backoff 20)
 
 (defn reset-state! []
   (locking broker-lock
@@ -170,8 +171,9 @@
                 ;; consumer is interested in. It is possible through race conditions
                 ;; that this signal was a lie, that is, that we already read the
                 ;; messages the broker is trying to tell us about, but it is
-                ;; harmless to retry.
-                poll-chan ([_] (.poll this max-timeout))
+                ;; harmless to retry as long as we back off a little bit to avoid
+                ;; flooding the message channel
+                poll-chan ([_] (Thread/sleep consumer-backoff) (.poll this max-timeout))
                 ;; Or if we've waited too long for messages, give up
                 (timeout max-timeout) ([_] nil)
                 wakeup-chan ([_] (throw (WakeupException.))))))))))
@@ -245,20 +247,22 @@
         (ensure-topic topic)
         (add-record-to-topic producer-record))))
 
-(defn drain [ch]
-  ;; TODO: can infinite loop in certain race conditions
-  (loop [out []]
-    (if-let [o (poll! ch)]
-      (recur (conj out o))
-      out)))
+(defn close-all-from [ch]
+  ;; the consumers back off to avoid flooding this channel but in some malicious
+  ;; scenarios this could loop forever. Could add a max watchers param if we wanted
+  ;; keep this under control or send over some sort of communication as to which
+  ;; tick this occurred in to try to know when to stop? Or an entirely different design.
+  (loop []
+    (when-let [o (poll! ch)]
+      (close! o)
+      (recur))))
 
 (defn save-record! [record]
   (let [topic (.topic record)
         record-with-partition (ProducerRecord. topic (or (.partition record) (int 0)) (.key record) (.value record))
         state-with-record (swap! broker-state add-record-in-broker-state record-with-partition)
         partition (get-in state-with-record [topic (.partition record-with-partition)])]
-    (doseq [ch (drain (:watchers partition))]
-      (close! ch))
+    (close-all-from (:watchers partition))
     (last (:messages partition))))
 
 (def noop-cb
