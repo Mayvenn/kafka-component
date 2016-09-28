@@ -113,7 +113,7 @@
 
 ;; TODO: implement missing methods
 ;; TODO: validate config?
-(defrecord MockConsumer [consumer-state config]
+(defrecord MockConsumer [consumer-state logger config]
   Consumer
   (assign [_ partitions]
     (let [broker-state @broker-state]
@@ -199,10 +199,11 @@
     (close! (:wakeup-chan @consumer-state))))
 
 (defn mock-consumer
-  ([config] (mock-consumer [] config))
-  ([auto-subscribe-topics config]
+  ([logger config] (mock-consumer [] logger config))
+  ([auto-subscribe-topics logger config]
    (let [mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}
                                               :wakeup-chan (chan)})
+                                       logger
                                        (or config {}))]
      (when (seq auto-subscribe-topics)
        (.subscribe mock-consumer auto-subscribe-topics))
@@ -210,7 +211,7 @@
 
 (defn mock-consumer-task [{:keys [config logger exception-handler consumer-component]} task-id]
   (core/->ConsumerAlwaysCommitTask logger exception-handler (:consumer consumer-component)
-                                   (config :kafka-consumer-config) (partial mock-consumer (config :topics-or-regex))
+                                   (config :kafka-consumer-config) (partial mock-consumer (config :topics-or-regex) logger)
                                    (atom nil) task-id))
 
 (defn mock-consumer-pool

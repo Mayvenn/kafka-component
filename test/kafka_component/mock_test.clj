@@ -178,13 +178,17 @@
       (when (>= (count updated-messages) expected-message-count)
         (deliver messages-promise @messages)))))
 
+(defn logger [& args]
+  (locking println
+    (apply println args)))
+
 (defn new-mock-pool [config expected-message-count received-messages]
   (mock-consumer-pool (merge {:topics-or-regex []
                               :pool-size 1
-                              :kafka-config {"auto.offset.reset" "earliest"
-                                             "group.id" "test-group"}} config)
+                              :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                      "group.id" "test-group"}} config)
                       {:consumer (partial consume-messages expected-message-count (atom []) received-messages)}
-                      println println))
+                      logger logger))
 
 (deftest consumer-pool-can-be-started-to-consume-messages
   (let [received-messages (promise)]
