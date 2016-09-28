@@ -134,7 +134,8 @@
           ;; Tell broker we'll be ready when it gets more messages
           (doseq [[topic-partition _] subscribed-topic-partitions]
             (>!! (get-in state [(.topic topic-partition) (.partition topic-partition) :watchers]) poll-chan))
-          (let [messages (mapcat (fn [[topic-partition read-offset]]
+          (let [state @broker-state ;; need to re-read broker state now that the watchers are in place
+                messages (mapcat (fn [[topic-partition read-offset]]
                                    (let [topic (.topic topic-partition)
                                          partition (.partition topic-partition)
                                          messages (get-in state [topic partition :messages])]
