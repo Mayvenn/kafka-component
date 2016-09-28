@@ -215,3 +215,28 @@
         (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
                 {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
                (sort-by :partition (deref received-messages 5000 []))))))))
+
+(deftest multiple-consumers-in-multiple-groups-share-the-messages-appropriately
+  (let [group-1-received-messages (promise)
+        group-2-received-messages (promise)]
+    (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
+                                                                   :pool-size 2
+                                                                   :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                                                           "group.id" "group1"}}
+                                                                  2 group-1-received-messages))]
+      component/stop
+      (with-resource [consumer-pool2 (component/start (new-mock-pool {:topics-or-regex ["topic"]
+                                                                      :pool-size 2
+                                                                      :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                                                              "group.id" "group2"}}
+                                                                     2 group-2-received-messages))]
+        component/stop
+        (let [producer (mock-producer {})]
+          @(.send producer (producer-record "topic" "key" "value" 0))
+          @(.send producer (producer-record "topic" "key2" "value2" 1))
+          (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
+                  {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
+                 (sort-by :partition (deref group-1-received-messages 5000 []))))
+          (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
+                  {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
+                 (sort-by :partition (deref group-2-received-messages 5000 [])))))))))
