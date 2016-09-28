@@ -10,25 +10,31 @@
            [java.util Collection]
            [java.util.regex Pattern]))
 
+;; TODO: can we get rid of broker lock with the new mock implementations?
+
 ;; structure of broker-state:
 ;; {"sample-topic" [{:messages [] :watchers chan} {:messages [] :watchers chan}]}
 (def broker-state (atom {}))
 (def broker-lock (Object.))
 
-;; (def consumers (atom {"group.id" [{:consumer-id 1 :topics ["test"]} {:consumer-id 2 :topics ["test"]}]
-;;                       "group2" [{:topics ["test"]}]
-;;                       ["group-1" "topic-1"] [:consumer-1 :consumer-2]
-;;                       ["group-1" "topic-2"] [:consumer-1 :consumer-2]
-;;
-;;                       {tps [{:consumer-group 1 :consumer c :committed-offset 12}]}
-;;                       }))
+;; structure of committed-offsets:
+;; {[topic-partition "group-id"] 10}
+(def committed-offsets (atom {}))
+
+;; structure of partition-assignments:
+;; {["topic" "group-1"] {consumer1 [0 1] ;; the partitions
+;;                                      }
+;;  ["topic" "group-2"] {consumer2 [0] consumer3 [1]}}
+(def partition-assignments (atom {}))
 
 (def buffer-size 20)
 (def default-num-partitions 2)
 
 (defn reset-state! []
   (locking broker-lock
-    (reset! broker-state {})))
+    (reset! broker-state {})
+    (reset! committed-offsets {})
+    (reset! partition-assignments {})))
 
 (defn fixture-reset-state! [f]
   (reset-state!)
@@ -64,6 +70,19 @@
       (Integer/parseInt max-poll-records-str))
     Integer/MAX_VALUE))
 
+(defn subscribe-consumer-to-topics [partition-assignments consumer group-id topics]
+  (reduce (fn [new-partition-assignments topic]
+            (update new-partition-assignments [topic group-id] assoc consumer []))
+          partition-assignments topics))
+
+(defn rebalance [partition-assignments broker-state group-id topics]
+  (reduce (fn [new-partition-assignments topic]
+            (let [partition-count (count (broker-state topic))
+                  consumers (keys (new-partition-assignments [topic group-id]))]
+              (assoc new-partition-assignments [topic group-id]
+                     (into {} (map vector consumers (partition-all (/ partition-count (count consumers)) (range partition-count)))))))
+          partition-assignments topics))
+
 ;; TODO: support grabbing last committed offset and only use earliest/latest/none if there are no committed offsets
 ;; TODO: support "none"
 ;; TODO: anything other than earliest, latest, none is to throw an exception
@@ -80,7 +99,12 @@
 ;; TODO: instead of registered topics, it may be easier to have topicpartitions for pause
 (defrecord MockConsumer [consumer-state config]
   Consumer
-  (assign [_ partitions])
+  (assign [_ partitions]
+    (let [broker-state @broker-state]
+      (swap! consumer-state update :subscribed-topic-partitions
+             into (for [topic-partition partitions]
+                    [topic-partition
+                     (get-offset broker-state (.topic topic-partition) (.partition topic-partition) config)]))))
   (close [_] (swap! consumer-state close-mock))
   (commitAsync [_])
   (commitAsync [_ offsets cb])
@@ -131,23 +155,27 @@
                 ;; that this signal was a lie, that is, that we already read the
                 ;; messages the broker is trying to tell us about, but it is
                 ;; harmless to retry.
-                poll-chan ([_] (println "poll") (.poll this max-timeout))
+                poll-chan ([_] (.poll this max-timeout))
                 ;; Or if we've waited too long for messages, give up
-                (timeout max-timeout) ([_] (println "timing out") nil)
+                (timeout max-timeout) ([_] nil)
                 wakeup-chan ([_] (throw (WakeupException.))))))))))
   (position [_ partition])
   (resume [_ partitions])
   (seek [_ partition offset])
   (seekToBeginning [_ partitions])
   (seekToEnd [_ partitions])
-  (subscribe [_ topics]
+  (subscribe [this topics]
     ;; TODO: what if already subscribed, what does Kafka do?
-    (doseq [topic topics]
-      (let [state-with-topic (swap! broker-state ensure-topic topic)
-            partition-count (count (state-with-topic topic))]
-        (swap! consumer-state update :subscribed-topic-partitions into (for [i (range partition-count)]
-                                                                         [(->topic-partition topic i)
-                                                                          (get-offset state-with-topic topic i config)])))))
+    (locking broker-lock
+      (doseq [topic topics]
+        (swap! broker-state ensure-topic topic)))
+    (let [group-id (config "group.id" "")
+          broker-state @broker-state
+          _ (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
+          updated-partition-assignments (swap! partition-assignments rebalance broker-state group-id topics)]
+      (doseq [topic topics]
+        (doseq [[consumer partitions] (updated-partition-assignments [topic group-id])]
+          (.assign consumer (map #(TopicPartition. topic %) partitions))))))
   (unsubscribe [_]
     (swap! consumer-state assoc :subscribed-topic-partitions {}))
   (wakeup [_]

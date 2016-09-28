@@ -125,9 +125,9 @@
   (let [[producer consumer] (create-mocks)
         msg-promise (promise)]
     (.subscribe consumer ["topic"])
-    (future (deliver msg-promise (get-messages consumer (* 2 timeout))))
+    (future (deliver msg-promise (get-messages consumer (* 4 timeout))))
     @(.send producer (producer-record))
-    (is (= 1 (count (deref msg-promise timeout []))))))
+    (is (= 1 (count (deref msg-promise (* 8 timeout) []))))))
 
 (deftest consumer-can-unsubscribe-from-topics
   (let [[producer consumer] (create-mocks)
@@ -199,16 +199,15 @@
                 {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
                (sort-by :partition (deref received-messages 5000 []))))))))
 
-(comment
-  (deftest multiple-consumers-in-the-same-group-share-the-messages
-    (let [received-messages (promise)]
-      (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
-                                                                     :pool-size 2}
-                                                                    2 received-messages))]
-        component/stop
-        (let [producer (mock-producer {})]
-          @(.send producer (producer-record "topic" "key" "value" 0))
-          @(.send producer (producer-record "topic" "key2" "value2" 1))
-          (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
-                  {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
-                 (sort-by :partition (deref received-messages 5000 [])))))))))
+(deftest multiple-consumers-in-the-same-group-share-the-messages
+  (let [received-messages (promise)]
+    (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
+                                                                   :pool-size 2}
+                                                                  2 received-messages))]
+      component/stop
+      (let [producer (mock-producer {})]
+        @(.send producer (producer-record "topic" "key" "value" 0))
+        @(.send producer (producer-record "topic" "key2" "value2" 1))
+        (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
+                {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
+               (sort-by :partition (deref received-messages 5000 []))))))))
