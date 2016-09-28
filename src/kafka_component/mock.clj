@@ -75,14 +75,25 @@
             (update new-partition-assignments [topic group-id] assoc consumer []))
           partition-assignments topics))
 
+(defn subscribe-consumer-to-topics [partition-assignments consumer group-id topics]
+  (reduce (fn [new-partition-assignments topic]
+            (update new-partition-assignments [topic group-id] dissoc consumer))
+          partition-assignments topics))
+
 ;; TODO: needs to handle if number of partitions is less than the number of consumers
-(defn rebalance [partition-assignments broker-state group-id topics]
+(defn rebalance-partition-assignments [partition-assignments broker-state group-id topics]
   (reduce (fn [new-partition-assignments topic]
             (let [partition-count (count (broker-state topic))
                   consumers (keys (new-partition-assignments [topic group-id]))]
               (assoc new-partition-assignments [topic group-id]
                      (into {} (map vector consumers (partition-all (/ partition-count (count consumers)) (range partition-count)))))))
           partition-assignments topics))
+
+(defn rebalance [group-id topics]
+  (let [updated-partition-assignments (swap! partition-assignments rebalance-partition-assignments @broker-state group-id topics)]
+    (doseq [topic topics]
+      (doseq [[consumer partitions] (updated-partition-assignments [topic group-id])]
+        (.assign consumer (map (partial ->topic-partition topic) partitions))))))
 
 ;; TODO: support grabbing last committed offset and only use earliest/latest/none if there are no committed offsets
 ;; TODO: support "none"
@@ -105,7 +116,9 @@
              into (for [topic-partition partitions]
                     [topic-partition
                      (get-offset broker-state (.topic topic-partition) (.partition topic-partition) config)]))))
-  (close [_] (swap! consumer-state close-mock))
+  (close [this]
+    (swap! consumer-state close-mock)
+    (.unsubscribe this))
   (commitAsync [_])
   (commitAsync [_ offsets cb])
   (commitAsync [_ cb])
@@ -167,15 +180,14 @@
     (swap! broker-state #(reduce (fn [state topic] (ensure-topic state topic)) % topics))
     ;; TODO: there's some pretty gnarly concurrency issues here on how it rebalances while other consumers may be consuming messages
     ;; kafka wants rebalances only to happen when all consumers are checked in as not processing messages
-    (let [group-id (config "group.id" "")
-          broker-state @broker-state
-          _ (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
-          updated-partition-assignments (swap! partition-assignments rebalance broker-state group-id topics)]
-      (doseq [topic topics]
-        (doseq [[consumer partitions] (updated-partition-assignments [topic group-id])]
-          (.assign consumer (map (partial ->topic-partition topic) partitions))))))
+    (let [group-id (config "group.id" "")]
+      (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
+      (rebalance group-id topics)))
   (unsubscribe [_]
-    (swap! consumer-state assoc :subscribed-topic-partitions {}))
+    (swap! consumer-state assoc :subscribed-topic-partitions {})
+    (let [group-id (config "group.id" "")]
+      (swap! partition-assignments unsubscribe-consumer-from-topics this group-id topics)
+      (rebalance group-id topics)))
   (wakeup [_]
     (swap! consumer-state assoc :woken-up? true)
     (close! (:wakeup-chan @consumer-state))))
