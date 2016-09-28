@@ -168,9 +168,7 @@
   (seekToEnd [_ partitions])
   (subscribe [this topics]
     ;; TODO: what if already subscribed, what does Kafka do?
-    (locking broker-lock
-      (doseq [topic topics]
-        (swap! broker-state ensure-topic topic)))
+    (swap! broker-state #(reduce (fn [state topic] (ensure-topic state topic)) % topics))
     (let [group-id (config "group.id" "")
           broker-state @broker-state
           _ (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
@@ -212,13 +210,19 @@
 (defn assert-producer-not-closed [producer-state])
 
 (defn producer-record->consumer-record [offset record]
-  (ConsumerRecord. (.topic record) (or (.partition record) 0) offset (.key record) (.value record)))
+  (ConsumerRecord. (.topic record) (.partition record) offset (.key record) (.value record)))
 
-(defn add-record-in-broker-state [state consumer-record]
-  (let [topic (.topic consumer-record)]
+(defn add-record-to-topic [state producer-record]
+  (let [topic (.topic producer-record)
+        offset (count (get-in state [topic (.partition producer-record) :messages]))
+        consumer-record (producer-record->consumer-record offset producer-record)]
+    (update-in state [topic (.partition consumer-record) :messages] conj consumer-record)))
+
+(defn add-record-in-broker-state [state producer-record]
+  (let [topic (.topic producer-record)]
     (-> state
         (ensure-topic topic)
-        (update-in [topic (.partition consumer-record) :messages] conj consumer-record))))
+        (add-record-to-topic producer-record))))
 
 (defn drain [ch]
   ;; TODO: can infinite loop in certain race conditions
@@ -228,15 +232,13 @@
       out)))
 
 (defn save-record! [record]
-  (locking broker-lock
-    (let [topic (.topic record)
-          offset (count (get-in @broker-state [topic (or (.partition record) 0) :messages]))
-          consumer-record (producer-record->consumer-record offset record)
-          state-with-record (swap! broker-state add-record-in-broker-state consumer-record)]
-      (let [ch (get-in @broker-state [topic (.partition consumer-record) :watchers])]
-        (doseq [ch (drain ch)]
-          (close! ch)))
-      consumer-record)))
+  (let [topic (.topic record)
+        record-with-partition (ProducerRecord. topic (or (.partition record) (int 0)) (.key record) (.value record))
+        state-with-record (swap! broker-state add-record-in-broker-state record-with-partition)
+        partition (get-in state-with-record [topic (.partition record-with-partition)])]
+    (doseq [ch (drain (:watchers partition))]
+      (close! ch))
+    (last (:messages partition))))
 
 (def noop-cb
   (reify
@@ -247,7 +249,6 @@
   (RecordMetadata. (record->topic-partition record) 0 (.offset record)
                    (.timestamp record) (.checksum record)
                    (.serializedKeySize record) (.serializedValueSize record)))
-
 
 (defrecord MockProducer [producer-state config]
   Producer
