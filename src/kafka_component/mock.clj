@@ -75,6 +75,7 @@
             (update new-partition-assignments [topic group-id] assoc consumer []))
           partition-assignments topics))
 
+;; TODO: needs to handle if number of partitions is less than the number of consumers
 (defn rebalance [partition-assignments broker-state group-id topics]
   (reduce (fn [new-partition-assignments topic]
             (let [partition-count (count (broker-state topic))
