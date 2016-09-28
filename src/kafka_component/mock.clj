@@ -121,9 +121,6 @@
     ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
     ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
     ;; TODO: round robin across topic-partitions?
-    ;; TODO: wakeup when trying to get more messages
-    ;; TODO: throw wakeup exception if already had been woken up before
-    ;; TODO: use consumer committed offset
     ;; TODO: assert not closed
     (let [state @broker-state
           {:keys [subscribed-topic-partitions wakeup-chan woken-up?]} @consumer-state
