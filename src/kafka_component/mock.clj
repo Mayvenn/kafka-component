@@ -75,7 +75,7 @@
             (update new-partition-assignments [topic group-id] assoc consumer []))
           partition-assignments topics))
 
-(defn subscribe-consumer-to-topics [partition-assignments consumer group-id topics]
+(defn unsubscribe-consumer-from-topics [partition-assignments consumer group-id topics]
   (reduce (fn [new-partition-assignments topic]
             (update new-partition-assignments [topic group-id] dissoc consumer))
           partition-assignments topics))
@@ -85,8 +85,10 @@
   (reduce (fn [new-partition-assignments topic]
             (let [partition-count (count (broker-state topic))
                   consumers (keys (new-partition-assignments [topic group-id]))]
-              (assoc new-partition-assignments [topic group-id]
-                     (into {} (map vector consumers (partition-all (/ partition-count (count consumers)) (range partition-count)))))))
+              (if (seq consumers)
+                (assoc new-partition-assignments [topic group-id]
+                       (into {} (map vector consumers (partition-all (/ partition-count (count consumers)) (range partition-count)))))
+                new-partition-assignments)))
           partition-assignments topics))
 
 (defn rebalance [group-id topics]
@@ -105,6 +107,9 @@
       "latest" latest-offset
       "none" (throw (UnsupportedOperationException.))
       latest-offset)))
+
+(defn consumer-topics [consumer-state]
+  (distinct (map #(.topic %) (keys (:subscribed-topic-partitions consumer-state)))))
 
 ;; TODO: implement missing methods
 ;; TODO: validate config?
@@ -125,7 +130,7 @@
   (commitSync [_])
   (commitSync [_ offsets])
   (committed [_ partition])
-  (listTopics [_])
+  (listTopics [_] (throw (UnsupportedOperationException.)))
   (metrics [_] (throw (UnsupportedOperationException.)))
   (partitionsFor [_ topic])
   (pause [_ partitions])
@@ -183,9 +188,10 @@
     (let [group-id (config "group.id" "")]
       (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
       (rebalance group-id topics)))
-  (unsubscribe [_]
-    (swap! consumer-state assoc :subscribed-topic-partitions {})
-    (let [group-id (config "group.id" "")]
+  (unsubscribe [this]
+    (let [group-id (config "group.id" "")
+          topics (consumer-topics @consumer-state)]
+      (swap! consumer-state assoc :subscribed-topic-partitions {})
       (swap! partition-assignments unsubscribe-consumer-from-topics this group-id topics)
       (rebalance group-id topics)))
   (wakeup [_]
