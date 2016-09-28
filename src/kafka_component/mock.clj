@@ -97,7 +97,6 @@
 
 ;; TODO: implement missing methods
 ;; TODO: validate config?
-;; TODO: instead of registered topics, it may be easier to have topicpartitions for pause
 (defrecord MockConsumer [consumer-state config]
   Consumer
   (assign [_ partitions]
