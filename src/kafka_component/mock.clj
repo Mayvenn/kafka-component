@@ -12,6 +12,7 @@
 
 ;; TODO: where should all the random comm chans go, they are siblings of topics in broker state right now, weird
 ;; TODO: update README for new consumer config/constructors
+;; TODO: pull out some of the timeouts as constants so it's easier to see that all the timeouts make sense together
 
 ;; structure of broker-state:
 ;; {"sample-topic" [{:messages [] :watchers chan} {:messages [] :watchers chan}]}
