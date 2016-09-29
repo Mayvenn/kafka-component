@@ -218,7 +218,6 @@
       (Integer/parseInt max-poll-records-str))
     Integer/MAX_VALUE))
 
-;; TODO: support grabbing last committed offset and only use earliest/latest/none if there are no committed offsets
 ;; TODO: support "none"
 ;; TODO: anything other than earliest, latest, none is to throw an exception
 (defn get-offset [broker-state topic partition config]
