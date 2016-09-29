@@ -255,9 +255,12 @@
   (commitAsync [_ cb])
   (commitSync [_])
   (commitSync [_ offsets]
-    (let [[topic-partition offset-and-metadata] (first offsets)
-          offset (.offset offset-and-metadata)]
-      (swap! committed-offsets assoc [(config "group.id" "") topic-partition] offset)))
+    (let [new-commits (reduce (fn [m [topic-partition offset-and-metadata]]
+                                (assoc m [(config "group.id" "") topic-partition]
+                                       (.offset offset-and-metadata)))
+                              {}
+                              offsets)]
+      (swap! committed-offsets merge new-commits)))
   (committed [_ partition])
   (listTopics [_] (throw (UnsupportedOperationException.)))
   (metrics [_] (throw (UnsupportedOperationException.)))
