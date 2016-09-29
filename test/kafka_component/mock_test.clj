@@ -226,7 +226,7 @@
       (let [producer (mock-producer {})]
         @(.send producer (producer-record "topic" "key" "value" 0))
         @(.send producer (producer-record "topic" "key2" "value2" 1))
-        (Thread/sleep timeout)
+        (Thread/sleep (* 4 timeout))
         (is (= 2 @message-count))))))
 
 ;; TODO: this test flakes out about 1/3 of the time on CI on the messages received from consumer-pool2, need
