@@ -109,9 +109,10 @@
   (goe-loop []
     (alt!
       msg-ch ([[res-ch msg]]
-              (>! res-ch (broker-save-record! state msg))
-              (close! res-ch)
-              (recur))
+              (when res-ch
+                (>! res-ch (broker-save-record! state msg))
+                (close! res-ch)
+                (recur)))
       close-ch nil)))
 
 (defprotocol IRebalance
@@ -154,10 +155,11 @@
   (goe-loop [participants []]
     (alt!
       participants-ch ([participant]
-                       (let [participants' (conj participants participant)]
-                         (if (>= (count participants') (count consumers))
-                           (generate-partition-assignments broker-state consumers participants' participants-ch complete-ch)
-                           (recur participants'))))
+                       (when participant
+                         (let [participants' (conj participants participant)]
+                           (if (>= (count participants') (count consumers))
+                             (generate-partition-assignments broker-state consumers participants' participants-ch complete-ch)
+                             (recur participants')))))
       (timeout 1000) (generate-partition-assignments broker-state consumers participants participants-ch complete-ch))))
 
 (defn rebalance-consumers [relevant-consumers broker-state rebalance-complete-ch]
