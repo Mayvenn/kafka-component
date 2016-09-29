@@ -25,32 +25,33 @@
   java.lang.Runnable
   (run [_]
     (let [kafka-consumer ((or make-kafka-consumer make-default-consumer) kafka-config)
+          group-id       (kafka-config "group.id")
           log-exception  (fn log-exception [e & msg]
-                           (logger :error (apply str "task-id=" task-id " msg=" msg))
+                           (logger :error (apply str "group=" group-id " task-id=" task-id " " msg))
                            (logger :error e)
                            (exception-handler e))
           log            (fn log [& msg]
-                           (logger :info (apply str "task-id=" task-id " msg=" msg)))]
+                           (logger :info (apply str "group=" group-id " task-id=" task-id " " msg)))]
 
       (reset! consumer-atom kafka-consumer)
       (try
-        (log "starting")
+        (log "action=starting")
 
         (while true
           (doseq [{:keys [topic partition offset key] :as record} (gregor/poll kafka-consumer)]
-            (log "received message with key: " key)
+            (log "action=receiving topic=" topic " partition=" partition " key=" key)
             (try
               (message-consumer record)
               (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
               (catch WakeupException e (throw e))
               (catch Exception e
-                (log-exception e "error in message consumer")))))
+                (log-exception e "msg=error in message consumer")))))
 
-        (log "exiting")
-        (catch WakeupException e (log "woken up"))
-        (catch Exception e (log-exception e "error in kafka consumer task runnable"))
+        (log "action=exiting")
+        (catch WakeupException e (log "action=woken-up"))
+        (catch Exception e (log-exception e "msg=error in kafka consumer task runnable"))
         (finally
-          (log "closing kafka consumer")
+          (log "action=closing-kafka-consumer")
           (gregor/close kafka-consumer)))))
 
   java.io.Closeable
@@ -86,16 +87,16 @@
   component/Lifecycle
   (start [c]
     (let [pool-id (pr-str (:topics-or-regex config))]
-      (logger :info (str "pool-id=" pool-id " msg=starting consumption"))
+      (logger :info (str "pool-id=" pool-id " msg=starting-consumption config=" (:kafka-consumer-config config)))
       (let [initialized-component (create-task-pool c pool-id)]
-        (logger :info (str "pool-id=" pool-id " msg=started consumption"))
+        (logger :info (str "pool-id=" pool-id " msg=started-consumption config=" (:kafka-consumer-config config)))
         initialized-component)))
 
   (stop [{:keys [logger] :as c}]
     (let [pool-id (pr-str (:topics-or-regex config))]
-      (logger :info (str "pool-id=" pool-id " msg=stopping consumption"))
+      (logger :info (str "pool-id=" pool-id " msg=stopping-consumption config=" (:kafka-consumer-config config)))
       (let [deinitialized-component (stop-task-pool c)]
-        (logger :info (str "pool-id=" pool-id " msg=stopped consumption"))
+        (logger :info (str "pool-id=" pool-id " msg=stopped-consumption config=" (:kafka-consumer-config config)))
         deinitialized-component))))
 
 (defrecord KafkaProducerComponent [config make-kafka-producer]
