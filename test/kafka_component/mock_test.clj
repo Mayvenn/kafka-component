@@ -81,7 +81,9 @@
            (get-messages consumer timeout)))))
 
 (deftest consumer-can-receive-message-from-different-partitions
-  (let [[producer consumer] (create-mocks)]
+  (let [producer (mock-producer {})
+        consumer (mock-consumer {"max.poll.records" "2"
+                                 "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic"])
     @(.send producer (producer-record "topic" "key" "value" 0))
     @(.send producer (producer-record "topic" "key" "value" 1))
@@ -117,7 +119,9 @@
     (is (= [] (get-messages consumer timeout)))))
 
 (deftest consumer-can-receive-messages-from-multiple-topics
-  (let [[producer consumer] (create-mocks)]
+  (let [producer (mock-producer {})
+        consumer (mock-consumer {"max.poll.records" "2"
+                                 "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic" "topic2"])
     @(.send producer (producer-record "topic" "key" "value"))
     @(.send producer (producer-record "topic2" "key2" "value2"))
@@ -134,7 +138,9 @@
     (is (= 1 (count (deref msg-promise (* 8 timeout) []))))))
 
 (deftest consumer-can-unsubscribe-from-topics
-  (let [[producer consumer] (create-mocks)]
+  (let [producer (mock-producer {})
+        consumer (mock-consumer {"auto.offset.reset" "earliest"
+                                 "max.poll.records" "2"})]
     (.subscribe consumer ["topic" "topic2"])
     @(.send producer (producer-record "topic" "key" "value"))
     @(.send producer (producer-record "topic2" "key2" "value2"))

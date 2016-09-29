@@ -10,7 +10,6 @@
            [java.util Collection]
            [java.util.regex Pattern]))
 
-;; TODO: use default config from clj-kafka.core
 ;; TODO: where should all the random comm chans go, they are siblings of topics in broker state right now, weird
 ;; TODO: update README for new consumer config/constructors
 ;; TODO: pull out some of the timeouts as constants so it's easier to see that all the timeouts make sense together
@@ -382,7 +381,7 @@
                                        (:join-ch @broker-state)
                                        (:leave-ch @broker-state)
                                        logger
-                                       (or config {}))]
+                                       (merge core/default-consumer-config config))]
      (when (seq auto-subscribe-topics)
        (.subscribe mock-consumer auto-subscribe-topics))
      mock-consumer)))
@@ -432,7 +431,7 @@
       (future @rtn-promise))))
 
 (defn mock-producer [config]
-  (->MockProducer (atom nil) (:msg-ch @broker-state) config))
+  (->MockProducer (atom nil) (:msg-ch @broker-state) (merge core/default-producer-config config)))
 
 (defn mock-producer-component [config]
   (core/->KafkaProducerComponent config mock-producer))
