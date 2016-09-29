@@ -164,7 +164,7 @@
 (defn rebalance-consumers [relevant-consumers broker-state rebalance-complete-ch]
   (let [rebalance-participants-ch (chan buffer-size)]
     (doseq [c relevant-consumers]
-      (prepare-for-rebalance c rebalance-participants-ch rebalance-complete-ch))
+      (>!! (:rebalance-control-ch c) [rebalance-participants-ch rebalance-complete-ch]))
     (perform-rebalance broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)))
 
 (defn consumer-coordinator [state broker-state join-ch leave-ch close-ch]
@@ -245,9 +245,27 @@
     (when-not (#{"earliest" "latest" "none"} auto-offset)
       (throw (InvalidOffsetException. (str "auto.offset.reset=" auto-offset ", invalid configuration"))))))
 
+(defn ^:private desires-repoll [subscribed-topic-partitions state]
+  (let [poll-chan (chan buffer-size)]
+    (doseq [[topic-partition _] subscribed-topic-partitions]
+      (>!! (get-in state [(.topic topic-partition) (.partition topic-partition) :watchers]) poll-chan))
+    poll-chan))
+
+(defn ^:private read-messages [subscribed-topic-partitions state config]
+  (let [messages (mapcat (fn unread-messages [[topic-partition read-offset]]
+                           (let [topic (.topic topic-partition)
+                                 partition (.partition topic-partition)
+                                 messages (get-in state [topic partition :messages])]
+                             (when (< read-offset (count messages))
+                               (subvec messages read-offset))))
+                         subscribed-topic-partitions)]
+    (->> messages
+         (take (max-poll-records config))
+         (group-by record->topic-partition))))
+
 ;; TODO: implement missing methods
 ;; TODO: validate config?
-(defrecord MockConsumer [consumer-state join-ch leave-ch logger config]
+(defrecord MockConsumer [consumer-state rebalance-control-ch join-ch leave-ch logger config]
   IRebalance
   (prepare-for-rebalance [_ rebalance-participants-ch rebalance-complete-ch]
     (swap! consumer-state assoc
@@ -293,65 +311,53 @@
     ;; TODO: assert not closed
     ;; TODO: what happens if you try to read partitions you don't "own"
     ;; TODO: it seems like we can have a long running rebalance-control-ch that sends [rebalance-participants-ch rebalance-complete-ch] and then switch the if conditions around rebalancing and waking up to an alt!! which would clean this up a bit and remove quite a few keys in the consumer-state
-    (let [state @broker-state
-          {:keys [subscribed-topic-partitions wakeup-chan woken-up? rebalance-participants-ch rebalance-complete-ch]} @consumer-state
-          poll-chan (chan buffer-size)]
-      (if rebalance-participants-ch
-        (do
-          (>!! rebalance-participants-ch this)
-          (alt!!
-            rebalance-complete-ch nil
-            (timeout 2000) (throw (Exception. "dead waiting for rebalance")))
-          (swap! consumer-state dissoc :rebalance-participants-ch :rebalance-complete-ch)
-          (.poll this max-timeout))
-        (if woken-up?
-          (throw (WakeupException.))
-          (do
-            ;; Tell broker that if it doesn't have messages now, but gets them
-            ;; while we're waiting for the timeout, we'd like to be interupted.
-            ;; This prevents excessive waiting and handles the case of an
-            ;; infinite max-timeout.
-            (doseq [[topic-partition _] subscribed-topic-partitions]
-              (>!! (get-in state [(.topic topic-partition) (.partition topic-partition) :watchers]) poll-chan))
-            ;; Need to re-read broker state immediately after setting watchers,
-            ;; so that we see any messages created between the time the poll
-            ;; started and when we registered. The first read of the broker
-            ;; state was just to find out where to put poll-chan
-            (let [state @broker-state
-                  messages (mapcat (fn [[topic-partition read-offset]]
-                                     (let [topic (.topic topic-partition)
-                                           partition (.partition topic-partition)
-                                           messages (get-in state [topic partition :messages])]
-                                       (when (< read-offset (count messages))
-                                         (subvec messages read-offset))))
-                                   subscribed-topic-partitions)
-                  read-messages (take (max-poll-records config) messages)
-                  grouped-messages (group-by record->topic-partition read-messages)
-                  new-read-offsets (read-offsets grouped-messages)]
-              (if (> (count read-messages) 0)
-                (do
-                  (swap! consumer-state update :subscribed-topic-partitions merge new-read-offsets)
-                  (ConsumerRecords. grouped-messages))
-                ;; Maybe we didn't actually have any messages to read
-                (alt!!
-                  ;; We've waited too long for messages, give up
-                  (timeout max-timeout) ([_]
-                                         ;; TODO: read one last time, maybe with (.poll this 0),
-                                         ;; but avoiding an infinite loop somehow?
-                                         nil)
-                  ;; But, before the timeout, broker got new messsages on some
-                  ;; topic+partition that this consumer is interested in. It is
-                  ;; possible through race conditions that this signal was a
-                  ;; lie, that is, that we already read the messages the broker
-                  ;; is trying to tell us about, but it is harmless to retry as
-                  ;; long as we back off a little bit to avoid flooding the
-                  ;; message channel
-                  poll-chan ([_]
-                             (Thread/sleep consumer-backoff)
-                             (.poll this max-timeout))
-                  ;; Somebody outside needs to shutdown quickly, and is aborting
-                  ;; the poll loop
-                  wakeup-chan (throw (WakeupException.))))))))))
+    (let [{:keys [wakeup-chan]} @consumer-state]
+      (alt!!
+        rebalance-control-ch ([[rebalance-participants-ch rebalance-complete-ch]]
+                              (>!! rebalance-participants-ch this)
+                              (alt!!
+                                rebalance-complete-ch nil
+                                (timeout 2000) (throw (Exception. "dead waiting for rebalance")))
+                              (swap! consumer-state dissoc :rebalance-participants-ch :rebalance-complete-ch)
+                              (.poll this max-timeout))
+        wakeup-chan (throw (WakeupException.))
+
+        :default
+        (let [{:keys [subscribed-topic-partitions]} @consumer-state
+              ;; Tell broker that if it doesn't have messages now, but gets them
+              ;; while we're waiting for the timeout, we'd like to be interupted.
+              ;; This prevents excessive waiting and handles the case of an
+              ;; infinite max-timeout.
+              poll-chan (desires-repoll subscribed-topic-partitions @broker-state)
+              ;; Need to re-read broker state immediately after setting watchers,
+              ;; so that we see any messages created between the time the poll
+              ;; started and when we registered. The first read of the broker
+              ;; state was just to find out where to put poll-chan
+              topic-partition->messages (read-messages subscribed-topic-partitions @broker-state config)]
+          (if (seq topic-partition->messages)
+            (do
+              (swap! consumer-state update :subscribed-topic-partitions merge (read-offsets topic-partition->messages))
+              (ConsumerRecords. topic-partition->messages))
+            ;; Maybe we didn't actually have any messages to read
+            (alt!!
+              ;; We've waited too long for messages, give up
+              (timeout max-timeout) ([_]
+                                     ;; TODO: read one last time, maybe with (.poll this 0),
+                                     ;; but avoiding an infinite loop somehow?
+                                     nil)
+              ;; But, before the timeout, broker got new messsages on some
+              ;; topic+partition that this consumer is interested in. It is
+              ;; possible through race conditions that this signal was a
+              ;; lie, that is, that we already read the messages the broker
+              ;; is trying to tell us about, but it is harmless to retry as
+              ;; long as we back off a little bit to avoid flooding the
+              ;; message channel
+              poll-chan ([_]
+                         (Thread/sleep consumer-backoff)
+                         (.poll this max-timeout))
+              ;; Somebody outside needs to shutdown quickly, and is aborting
+              ;; the poll loop
+              wakeup-chan (throw (WakeupException.))))))))
   (position [_ partition]
     ;; Not hard, but not valuable
     (throw (UnsupportedOperationException.)))
@@ -373,7 +379,6 @@
       [[leave-ch this]] :wrote
       (timeout 5000) (throw (Exception. "dead waiting to unsubscribe"))))
   (wakeup [_]
-    (swap! consumer-state assoc :woken-up? true)
     (close! (:wakeup-chan @consumer-state))))
 
 (defn mock-consumer
@@ -381,6 +386,7 @@
   ([auto-subscribe-topics config]
    (let [mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}
                                               :wakeup-chan (chan)})
+                                       (chan buffer-size)
                                        (:join-ch @broker-state)
                                        (:leave-ch @broker-state)
                                        logger
