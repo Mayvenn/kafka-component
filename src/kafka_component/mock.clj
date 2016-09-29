@@ -1,6 +1,6 @@
 (ns kafka-component.mock
   (:require [com.stuartsierra.component :as component]
-            [clojure.core.async :as async :refer [>!! <!! chan alt!! timeout close! poll! go-loop]]
+            [clojure.core.async :as async :refer [>! <! alt! >!! <!! chan alt!! timeout close! poll! go go-loop]]
             [kafka-component.core :as core])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords ConsumerRebalanceListener]
@@ -10,12 +10,11 @@
            [java.util Collection]
            [java.util.regex Pattern]))
 
-;; TODO: can we get rid of broker lock with the new mock implementations?
+;; TODO: where should all the random comm chans go, they are siblings of topics in broker state right now, weird
 
 ;; structure of broker-state:
 ;; {"sample-topic" [{:messages [] :watchers chan} {:messages [] :watchers chan}]}
 (def broker-state (atom {}))
-(def broker-lock (Object.))
 
 ;; structure of committed-offsets:
 ;; {[topic-partition "group-id"] 10}
@@ -27,38 +26,186 @@
 ;;  ["topic" "group-2"] {consumer2 [0] consumer3 [1]}}
 (def partition-assignments (atom {}))
 
+
 (def buffer-size 20)
 (def default-num-partitions 2)
 (def consumer-backoff 20)
 
+(defn logger [& args]
+  (locking println
+    (apply println args)))
+
 (defn reset-state! []
-  (locking broker-lock
-    (reset! broker-state {})
-    (reset! committed-offsets {})
-    (reset! partition-assignments {})))
-
-(defn fixture-reset-state! [f]
-  (reset-state!)
-  (f))
-
-(defn create-topic
-  ([] (create-topic default-num-partitions))
-  ([num-partitions]
-   (into [] (repeatedly num-partitions (constantly {:messages [] :watchers (chan buffer-size)})))))
-
-(defn ensure-topic [broker-state topic]
-  (if (broker-state topic)
-    broker-state
-    (assoc broker-state topic (create-topic))))
-
-(defn close-mock [state]
-  (assoc state :conn-open? false))
+  (reset! broker-state {})
+  (reset! committed-offsets {})
+  (reset! partition-assignments {}))
 
 (defn ->topic-partition [topic partition]
   (TopicPartition. topic partition))
 
 (defn record->topic-partition [record]
   (TopicPartition. (.topic record) (.partition record)))
+
+(defn broker-create-topic
+  ([] (broker-create-topic default-num-partitions))
+  ([num-partitions]
+   (into [] (repeatedly num-partitions (constantly {:messages [] :watchers (chan buffer-size)})))))
+
+(defn broker-ensure-topic [broker-state topic]
+  (if (broker-state topic)
+    broker-state
+    (assoc broker-state topic (broker-create-topic))))
+
+(defn producer-record->consumer-record [offset record]
+  (ConsumerRecord. (.topic record) (.partition record) offset (.key record) (.value record)))
+
+(defn add-record-to-topic [state producer-record]
+  (let [topic (.topic producer-record)
+        offset (count (get-in state [topic (.partition producer-record) :messages]))
+        consumer-record (producer-record->consumer-record offset producer-record)]
+    (update-in state [topic (.partition consumer-record) :messages] conj consumer-record)))
+
+(defn add-record-in-broker-state [state producer-record]
+  (let [topic (.topic producer-record)]
+    (-> state
+        (broker-ensure-topic topic)
+        (add-record-to-topic producer-record))))
+
+(defmacro goe [& body]
+  `(go
+     (try ~@body
+          (catch Exception e#
+            (do (logger e#)
+                (throw e#))))))
+
+(defmacro goe-loop [& body]
+  `(goe (loop ~@body)))
+
+(defn close-all-from [ch]
+  ;; the consumers back off to avoid flooding this channel but in some malicious
+  ;; scenarios this could loop forever. Could add a max watchers param if we wanted
+  ;; keep this under control or send over some sort of communication as to which
+  ;; tick this occurred in to try to know when to stop? Or an entirely different design.
+  (loop []
+    (when-let [o (poll! ch)]
+      (close! o)
+      (recur))))
+
+(defn committed-record-metadata [record]
+  (RecordMetadata. (record->topic-partition record) 0 (.offset record)
+                   (.timestamp record) (.checksum record)
+                   (.serializedKeySize record) (.serializedValueSize record)))
+
+(defn broker-save-record! [state record]
+  (let [topic (.topic record)
+        record-with-partition (ProducerRecord. topic (or (.partition record) (int 0)) (.key record) (.value record))
+        state-with-record (swap! state add-record-in-broker-state record-with-partition)
+        partition (get-in state-with-record [topic (.partition record-with-partition)])]
+    (close-all-from (:watchers partition))
+    (committed-record-metadata (last (:messages partition)))))
+
+(defn broker-receive-messages [state msg-ch close-ch]
+  (go-loop []
+            (alt!
+              msg-ch ([[res-ch msg]]
+                      (>! res-ch (broker-save-record! state msg))
+                      (close! res-ch)
+                      (recur))
+              close-ch nil)))
+
+(defprotocol IRebalance
+  (prepare-for-rebalance [this rebalance-participants-ch rebalance-complete-ch])
+  (all-topics [this])
+  (apply-pending-topics [this topics])
+  (clean-up-subscriptions [this]))
+
+(defn generate-partition-assignments [broker-state consumers participants complete-ch]
+  (let [broker-state @broker-state
+        topics (distinct (mapcat all-topics consumers))
+        topic->participants (reduce (fn [m topic]
+                                      (assoc m topic
+                                             (filter #((into #{} (all-topics %)) topic) participants)))
+                                    {} topics)
+        consumer->assignments (reduce (fn [m [topic participants]]
+                                        (let [partition-count (count (broker-state topic))
+                                              partition-breakdowns (partition-all (/ partition-count (max (count participants) 1)) (range partition-count))]
+                                          (merge-with concat m (into {} (map vector participants
+                                                                             (map (fn [partition-breakdown]
+                                                                                    (map (partial ->topic-partition topic) partition-breakdown))
+                                                                                  partition-breakdowns))))))
+                                      {}
+                                      topic->participants)]
+    (doseq [consumer consumers]
+      (let [assignments (consumer->assignments consumer)]
+        (.assign consumer (or assignments []))))
+    (close! complete-ch)))
+
+(defn perform-rebalance [broker-state consumers participants-ch complete-ch]
+  (go-loop [participants []]
+    (alt!
+      participants-ch ([participant]
+                       (let [participants' (conj participants participant)]
+                         (if (>= (count participants') (count consumers))
+                           (generate-partition-assignments broker-state consumers participants' complete-ch)
+                           (recur participants'))))
+      (timeout 1000) (generate-partition-assignments broker-state consumers participants complete-ch))))
+
+(defn rebalance-consumers [relevant-consumers broker-state rebalance-complete-ch]
+  (let [rebalance-participants-ch (chan buffer-size)]
+    (doseq [c relevant-consumers]
+      (prepare-for-rebalance c rebalance-participants-ch rebalance-complete-ch))
+    (perform-rebalance broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)))
+
+(defn consumer-coordinator [state broker-state join-ch leave-ch close-ch]
+  (go-loop []
+            (alt!
+              join-ch ([[consumer topics]]
+                       (let [group-id (get-in consumer [:config "group.id"] "")
+                             rebalance-complete-ch (chan)]
+                         (apply-pending-topics consumer topics)
+                         (rebalance-consumers (get (swap! state update group-id (fnil conj #{}) consumer)
+                                                   group-id)
+                                              broker-state
+                                              rebalance-complete-ch)
+                         (<! rebalance-complete-ch)
+                         (recur)))
+              leave-ch ([consumer]
+                        (let [group-id (get-in consumer [:config "group.id"] "")
+                              rebalance-complete-ch (chan)]
+                          (clean-up-subscriptions consumer)
+                          (rebalance-consumers (get (swap! state update group-id disj consumer)
+                                                group-id)
+                                               broker-state
+                                               rebalance-complete-ch)
+                          (<! rebalance-complete-ch)
+                          (recur)))
+              close-ch nil)))
+
+(defn start! []
+  (let [msg-ch (chan buffer-size)
+        shutdown-ch (chan)
+        join-ch (chan)
+        leave-ch (chan)
+        consumer-coordinator-state (atom {})]
+    (broker-receive-messages broker-state msg-ch shutdown-ch)
+    (consumer-coordinator consumer-coordinator-state broker-state join-ch leave-ch shutdown-ch)
+    (reset! broker-state {:msg-ch msg-ch :shutdown-ch shutdown-ch :join-ch join-ch :leave-ch leave-ch})))
+
+(defn shutdown! []
+  (let [{:keys [shutdown-ch msg-ch join-ch leave-ch]} @broker-state]
+    (close! shutdown-ch)
+    (close! msg-ch)
+    (close! join-ch)
+    (close! leave-ch)
+    (reset-state!)))
+
+(defn fixture-restart-broker! [f]
+  (start!)
+  (f)
+  (shutdown!))
+
+(defn close-mock [state]
+  (assoc state :conn-open? false))
 
 (defn read-offsets [grouped-messages]
   (into {} (for [[topic-partition msg-list] grouped-messages]
@@ -71,57 +218,41 @@
       (Integer/parseInt max-poll-records-str))
     Integer/MAX_VALUE))
 
-(defn subscribe-consumer-to-topics [partition-assignments consumer group-id topics]
-  (reduce (fn [new-partition-assignments topic]
-            (update new-partition-assignments [topic group-id] assoc consumer []))
-          partition-assignments topics))
-
-(defn unsubscribe-consumer-from-topics [partition-assignments consumer group-id topics]
-  (reduce (fn [new-partition-assignments topic]
-            (update new-partition-assignments [topic group-id] dissoc consumer))
-          partition-assignments topics))
-
-;; TODO: needs to handle if number of partitions is less than the number of consumers
-(defn rebalance-partition-assignments [partition-assignments broker-state group-id topics]
-  (reduce (fn [new-partition-assignments topic]
-            (let [partition-count (count (broker-state topic))
-                  consumers (keys (new-partition-assignments [topic group-id]))]
-              (if (seq consumers)
-                (assoc new-partition-assignments [topic group-id]
-                       (into {} (map vector consumers (partition-all (/ partition-count (count consumers)) (range partition-count)))))
-                new-partition-assignments)))
-          partition-assignments topics))
-
-(defn rebalance [group-id topics]
-  (let [updated-partition-assignments (swap! partition-assignments rebalance-partition-assignments @broker-state group-id topics)]
-    (doseq [topic topics]
-      (doseq [[consumer partitions] (updated-partition-assignments [topic group-id])]
-        (.assign consumer (map (partial ->topic-partition topic) partitions))))))
-
 ;; TODO: support grabbing last committed offset and only use earliest/latest/none if there are no committed offsets
 ;; TODO: support "none"
 ;; TODO: anything other than earliest, latest, none is to throw an exception
 (defn get-offset [broker-state topic partition config]
-  (let [latest-offset (count (get-in broker-state [topic partition :messages]))]
-    (case (config "auto.offset.reset")
-      "earliest" 0
-      "latest" latest-offset
-      "none" (throw (UnsupportedOperationException.))
-      latest-offset)))
-
-(defn consumer-topics [consumer-state]
-  (distinct (map #(.topic %) (keys (:subscribed-topic-partitions consumer-state)))))
+  (let [group-id (config "group.id" "")]
+    (if-let [committed-offset (get @committed-offsets [group-id (->topic-partition topic partition)])]
+      committed-offset
+      (let [latest-offset (count (get-in broker-state [topic partition :messages]))]
+        (case (config "auto.offset.reset")
+          "earliest" 0
+          "latest" latest-offset
+          "none" (throw (UnsupportedOperationException.))
+          latest-offset)))))
 
 ;; TODO: implement missing methods
 ;; TODO: validate config?
-(defrecord MockConsumer [consumer-state logger config]
+(defrecord MockConsumer [consumer-state join-ch leave-ch logger config]
+  IRebalance
+  (prepare-for-rebalance [_ rebalance-participants-ch rebalance-complete-ch]
+    (swap! consumer-state assoc
+           :rebalance-participants-ch rebalance-participants-ch
+           :rebalance-complete-ch rebalance-complete-ch))
+  (all-topics [_] (:subscribed-topics @consumer-state))
+  (apply-pending-topics [_ topics]
+    (swap! consumer-state assoc :subscribed-topics topics))
+  (clean-up-subscriptions [_]
+    (swap! consumer-state assoc :subscribed-topics [] :subscribed-topic-partitions {}))
   Consumer
   (assign [_ partitions]
     (let [broker-state @broker-state]
-      (swap! consumer-state update :subscribed-topic-partitions
-             into (for [topic-partition partitions]
-                    [topic-partition
-                     (get-offset broker-state (.topic topic-partition) (.partition topic-partition) config)]))))
+      (swap! consumer-state assoc :subscribed-topic-partitions
+             (reduce (fn [m topic-partition]
+                       (assoc m topic-partition
+                              (get-offset broker-state (.topic topic-partition) (.partition topic-partition) config)))
+                     {} partitions))))
   (close [this]
     (swap! consumer-state close-mock)
     (.unsubscribe this))
@@ -129,7 +260,10 @@
   (commitAsync [_ offsets cb])
   (commitAsync [_ cb])
   (commitSync [_])
-  (commitSync [_ offsets])
+  (commitSync [_ offsets]
+    (let [[topic-partition offset-and-metadata] (first offsets)
+          offset (.offset offset-and-metadata)]
+      (swap! committed-offsets assoc [(config "group.id" "") topic-partition] offset)))
   (committed [_ partition])
   (listTopics [_] (throw (UnsupportedOperationException.)))
   (metrics [_] (throw (UnsupportedOperationException.)))
@@ -141,78 +275,79 @@
     ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
     ;; TODO: round robin across topic-partitions?
     ;; TODO: assert not closed
+    ;; TODO: what happens if you try to read partitions you don't "own"
     (let [state @broker-state
-          {:keys [subscribed-topic-partitions wakeup-chan woken-up?]} @consumer-state
+          {:keys [subscribed-topic-partitions wakeup-chan woken-up? rebalance-participants-ch rebalance-complete-ch]} @consumer-state
           poll-chan (chan buffer-size)]
-      (if woken-up?
-        (throw (WakeupException.))
+      (if rebalance-participants-ch
         (do
-          ;; Tell broker we'll be ready when it gets more messages
-          (doseq [[topic-partition _] subscribed-topic-partitions]
-            (>!! (get-in state [(.topic topic-partition) (.partition topic-partition) :watchers]) poll-chan))
-          (let [state @broker-state ;; need to re-read broker state now that the watchers are in place
-                messages (mapcat (fn [[topic-partition read-offset]]
-                                   (let [topic (.topic topic-partition)
-                                         partition (.partition topic-partition)
-                                         messages (get-in state [topic partition :messages])]
-                                     (when (< read-offset (count messages))
-                                       (subvec messages read-offset))))
-                                 subscribed-topic-partitions)
-                read-messages (take (max-poll-records config) messages)
-                grouped-messages (group-by record->topic-partition read-messages)
-                new-read-offsets (read-offsets grouped-messages)]
-            (if (> (count read-messages) 0)
-              (do
-                (swap! consumer-state update :subscribed-topic-partitions merge new-read-offsets)
-                (ConsumerRecords. grouped-messages))
-              ;; Maybe we didn't actually have any messages to read
-              (alt!!
-                ;; Broker got new messsages on some topic+partition that this
-                ;; consumer is interested in. It is possible through race conditions
-                ;; that this signal was a lie, that is, that we already read the
-                ;; messages the broker is trying to tell us about, but it is
-                ;; harmless to retry as long as we back off a little bit to avoid
-                ;; flooding the message channel
-                poll-chan ([_] (Thread/sleep consumer-backoff) (.poll this max-timeout))
-                ;; Or if we've waited too long for messages, give up
-                (timeout max-timeout) ([_] nil)
-                wakeup-chan ([_] (throw (WakeupException.))))))))))
+          (>!! rebalance-participants-ch this)
+          (alt!!
+            rebalance-complete-ch nil
+            (timeout 2000) (throw (Exception. "dead waiting for rebalance")))
+          (swap! consumer-state dissoc :rebalance-participants-ch :rebalance-complete-ch)
+          (.poll this max-timeout))
+        (if woken-up?
+          (throw (WakeupException.))
+          (do
+            ;; Tell broker we'll be ready when it gets more messages
+            (doseq [[topic-partition _] subscribed-topic-partitions]
+              (>!! (get-in state [(.topic topic-partition) (.partition topic-partition) :watchers]) poll-chan))
+            (let [state @broker-state ;; need to re-read broker state now that the watchers are in place
+                  messages (mapcat (fn [[topic-partition read-offset]]
+                                     (let [topic (.topic topic-partition)
+                                           partition (.partition topic-partition)
+                                           messages (get-in state [topic partition :messages])]
+                                       (when (< read-offset (count messages))
+                                         (subvec messages read-offset))))
+                                   subscribed-topic-partitions)
+                  read-messages (take (max-poll-records config) messages)
+                  grouped-messages (group-by record->topic-partition read-messages)
+                  new-read-offsets (read-offsets grouped-messages)]
+              (if (> (count read-messages) 0)
+                (do
+                  (swap! consumer-state update :subscribed-topic-partitions merge new-read-offsets)
+                  (ConsumerRecords. grouped-messages))
+                ;; Maybe we didn't actually have any messages to read
+                (alt!!
+                  ;; Broker got new messsages on some topic+partition that this
+                  ;; consumer is interested in. It is possible through race conditions
+                  ;; that this signal was a lie, that is, that we already read the
+                  ;; messages the broker is trying to tell us about, but it is
+                  ;; harmless to retry as long as we back off a little bit to avoid
+                  ;; flooding the message channel
+                  poll-chan ([_] (Thread/sleep consumer-backoff) (.poll this max-timeout))
+                  ;; Or if we've waited too long for messages, give up
+                  (timeout max-timeout) ([_] nil)
+                  wakeup-chan ([_] (throw (WakeupException.)))))))))))
   (position [_ partition])
   (resume [_ partitions])
   (seek [_ partition offset])
   (seekToBeginning [_ partitions])
   (seekToEnd [_ partitions])
   (^void subscribe [^Consumer this ^Collection topics]
-    ;; TODO: what if already subscribed, what does Kafka do?
-    (swap! broker-state #(reduce (fn [state topic] (ensure-topic state topic)) % topics))
-    ;; TODO: there's some pretty gnarly concurrency issues here on how it rebalances while other consumers may be consuming messages
-    ;; kafka wants rebalances only to happen when all consumers are checked in as not processing messages
-    (let [group-id (config "group.id" "")]
-      (swap! partition-assignments subscribe-consumer-to-topics this group-id topics)
-      (rebalance group-id topics)))
+   ;; TODO: what if already subscribed, what does Kafka do?
+   (swap! broker-state #(reduce (fn [state topic] (broker-ensure-topic state topic)) % topics))
+   (>!! join-ch [this topics]))
   (^void subscribe [^Consumer this ^Collection topics ^ConsumerRebalanceListener listener]
    (throw (UnsupportedOperationException.)))
   (^void subscribe [^Consumer this ^Pattern pattern ^ConsumerRebalanceListener listener]
    (throw (UnsupportedOperationException.)))
   (unsubscribe [this]
-    (let [group-id (config "group.id" "")
-          topics (consumer-topics @consumer-state)]
-      (swap! consumer-state assoc :subscribed-topic-partitions {})
-      (swap! partition-assignments unsubscribe-consumer-from-topics this group-id topics)
-      (rebalance group-id topics)))
+    (alt!!
+      [[leave-ch this]] :wrote
+      (timeout 5000) (throw (Exception. "dead waiting to unsubscribe"))))
   (wakeup [_]
     (swap! consumer-state assoc :woken-up? true)
     (close! (:wakeup-chan @consumer-state))))
-
-(defn logger [& args]
-  (locking println
-    (apply println args)))
 
 (defn mock-consumer
   ([config] (mock-consumer [] config))
   ([auto-subscribe-topics config]
    (let [mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}
                                               :wakeup-chan (chan)})
+                                       (:join-ch @broker-state)
+                                       (:leave-ch @broker-state)
                                        logger
                                        (or config {}))]
      (when (seq auto-subscribe-topics)
@@ -236,50 +371,12 @@
 (defn assert-proper-record [record])
 (defn assert-producer-not-closed [producer-state])
 
-(defn producer-record->consumer-record [offset record]
-  (ConsumerRecord. (.topic record) (.partition record) offset (.key record) (.value record)))
-
-(defn add-record-to-topic [state producer-record]
-  (let [topic (.topic producer-record)
-        offset (count (get-in state [topic (.partition producer-record) :messages]))
-        consumer-record (producer-record->consumer-record offset producer-record)]
-    (update-in state [topic (.partition consumer-record) :messages] conj consumer-record)))
-
-(defn add-record-in-broker-state [state producer-record]
-  (let [topic (.topic producer-record)]
-    (-> state
-        (ensure-topic topic)
-        (add-record-to-topic producer-record))))
-
-(defn close-all-from [ch]
-  ;; the consumers back off to avoid flooding this channel but in some malicious
-  ;; scenarios this could loop forever. Could add a max watchers param if we wanted
-  ;; keep this under control or send over some sort of communication as to which
-  ;; tick this occurred in to try to know when to stop? Or an entirely different design.
-  (loop []
-    (when-let [o (poll! ch)]
-      (close! o)
-      (recur))))
-
-(defn save-record! [record]
-  (let [topic (.topic record)
-        record-with-partition (ProducerRecord. topic (or (.partition record) (int 0)) (.key record) (.value record))
-        state-with-record (swap! broker-state add-record-in-broker-state record-with-partition)
-        partition (get-in state-with-record [topic (.partition record-with-partition)])]
-    (close-all-from (:watchers partition))
-    (last (:messages partition))))
-
 (def noop-cb
   (reify
     Callback
     (onCompletion [this record-metadata e])))
 
-(defn committed-record-metadata [record]
-  (RecordMetadata. (record->topic-partition record) 0 (.offset record)
-                   (.timestamp record) (.checksum record)
-                   (.serializedKeySize record) (.serializedValueSize record)))
-
-(defrecord MockProducer [producer-state config]
+(defrecord MockProducer [producer-state msg-ch config]
   Producer
   (close [_] (swap! producer-state close-mock))
   (close [_ timeout time-unit] (swap! producer-state close-mock))
@@ -292,13 +389,17 @@
     (assert-proper-config config)
     (assert-proper-record producer-record)
     (assert-producer-not-closed producer-state)
-    (let [consumer-record (save-record! producer-record)
-          record-metadata (committed-record-metadata consumer-record)]
-      (.onCompletion cb record-metadata nil)
-      (future record-metadata))))
+    (let [res-ch (chan 1)
+          rtn-promise (promise)]
+      (go
+        (>! msg-ch [res-ch producer-record])
+        (let [committed-record-metadata (<! res-ch)]
+          (.onCompletion cb committed-record-metadata nil)
+          (deliver rtn-promise committed-record-metadata)))
+      (future @rtn-promise))))
 
 (defn mock-producer [config]
-  (->MockProducer (atom nil) config))
+  (->MockProducer (atom nil) (:msg-ch @broker-state) config))
 
 (defn mock-producer-component [config]
   (core/->KafkaProducerComponent config mock-producer))

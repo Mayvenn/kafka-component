@@ -55,7 +55,8 @@
 
   java.io.Closeable
   (close [_]
-    (gregor/wakeup @consumer-atom)))
+    (when-let [consumer @consumer-atom]
+      (gregor/wakeup consumer))))
 
 (defn make-default-task [{:keys [logger exception-handler consumer-component config]} task-id]
   (->ConsumerAlwaysCommitTask logger
