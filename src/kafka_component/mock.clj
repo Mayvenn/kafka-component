@@ -33,6 +33,7 @@
     (apply println args)))
 
 (defn reset-state! []
+  ;; TODO: wait until everyone is shutdown before clearing these
   (reset! broker-state {})
   (reset! committed-offsets {}))
 
@@ -323,7 +324,10 @@
                 ;; Maybe we didn't actually have any messages to read
                 (alt!!
                   ;; We've waited too long for messages, give up
-                  (timeout max-timeout) nil
+                  (timeout max-timeout) ([_]
+                                         ;; TODO: read one last time, maybe with (.poll this 0),
+                                         ;; but avoiding an infinite loop somehow?
+                                         nil)
                   ;; But, before the timeout, broker got new messsages on some
                   ;; topic+partition that this consumer is interested in. It is
                   ;; possible through race conditions that this signal was a
