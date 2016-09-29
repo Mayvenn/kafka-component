@@ -1,14 +1,13 @@
 (ns kafka-component.mock
-  (:require [com.stuartsierra.component :as component]
-            [clojure.core.async :as async :refer [>! <! alt! >!! <!! chan alt!! timeout close! poll! go go-loop sliding-buffer]]
+  (:require [clojure.core.async :refer [<! >! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
             [kafka-component.core :as core])
-  (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
-           [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords ConsumerRebalanceListener]
-           [org.apache.kafka.common TopicPartition]
-           [org.apache.kafka.common.errors WakeupException InvalidOffsetException]
-           [java.lang Integer]
-           [java.util Collection]
-           [java.util.regex Pattern]))
+  (:import java.lang.Integer
+           java.util.Collection
+           java.util.regex.Pattern
+           [org.apache.kafka.clients.consumer Consumer ConsumerRebalanceListener ConsumerRecord ConsumerRecords]
+           [org.apache.kafka.clients.producer Callback Producer ProducerRecord RecordMetadata]
+           [org.apache.kafka.common.errors InvalidOffsetException WakeupException]
+           org.apache.kafka.common.TopicPartition))
 
 ;; TODO: where should all the random comm chans go, they are siblings of topics in broker state right now, weird
 ;; TODO: update README for new consumer config/constructors

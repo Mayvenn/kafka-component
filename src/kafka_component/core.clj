@@ -2,7 +2,7 @@
   (:require [com.stuartsierra.component :as component]
             [gregor.core :as gregor])
   (:import [java.util.concurrent Executors TimeUnit]
-           [org.apache.kafka.common.errors WakeupException]))
+           org.apache.kafka.common.errors.WakeupException))
 
 (def default-consumer-config
   {"enable.auto.commit"	"false"
