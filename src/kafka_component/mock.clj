@@ -10,6 +10,7 @@
            [java.util Collection]
            [java.util.regex Pattern]))
 
+;; TODO: use default config from clj-kafka.core
 ;; TODO: where should all the random comm chans go, they are siblings of topics in broker state right now, weird
 ;; TODO: update README for new consumer config/constructors
 ;; TODO: pull out some of the timeouts as constants so it's easier to see that all the timeouts make sense together
@@ -266,10 +267,10 @@
   (close [this]
     (swap! consumer-state close-mock)
     (.unsubscribe this))
-  (commitAsync [_])
-  (commitAsync [_ offsets cb])
-  (commitAsync [_ cb])
-  (commitSync [_])
+  (commitAsync [_] (throw (UnsupportedOperationException.)))
+  (commitAsync [_ offsets cb] (throw (UnsupportedOperationException.)))
+  (commitAsync [_ cb] (throw (UnsupportedOperationException.)))
+  (commitSync [_] (throw (UnsupportedOperationException.)))
   (commitSync [_ offsets]
     (let [new-commits (reduce (fn [m [topic-partition offset-and-metadata]]
                                 (assoc m [(config "group.id" "") topic-partition]
@@ -277,12 +278,12 @@
                               {}
                               offsets)]
       (swap! committed-offsets merge new-commits)))
-  (committed [_ partition])
+  (committed [_ partition] (throw (UnsupportedOperationException.)))
   (listTopics [_] (throw (UnsupportedOperationException.)))
   (metrics [_] (throw (UnsupportedOperationException.)))
-  (partitionsFor [_ topic])
-  (pause [_ partitions])
-  (paused [_])
+  (partitionsFor [_ topic] (throw (UnsupportedOperationException.)))
+  (pause [_ partitions] (throw (UnsupportedOperationException.)))
+  (paused [_] (throw (UnsupportedOperationException.)))
   (poll [this max-timeout]
     ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
     ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
@@ -349,11 +350,13 @@
                   ;; Somebody outside needs to shutdown quickly, and is aborting
                   ;; the poll loop
                   wakeup-chan (throw (WakeupException.))))))))))
-  (position [_ partition])
-  (resume [_ partitions])
-  (seek [_ partition offset])
-  (seekToBeginning [_ partitions])
-  (seekToEnd [_ partitions])
+  (position [_ partition]
+    ;; Not hard, but not valuable
+    (throw (UnsupportedOperationException.)))
+  (resume [_ partitions] (throw (UnsupportedOperationException.)))
+  (seek [_ partition offset] (throw (UnsupportedOperationException.)))
+  (seekToBeginning [_ partitions] (throw (UnsupportedOperationException.)))
+  (seekToEnd [_ partitions] (throw (UnsupportedOperationException.)))
   (^void subscribe [^Consumer this ^Collection topics]
    (assert-proper-consumer-config config)
    ;; TODO: what if already subscribed, what does Kafka do?
@@ -410,7 +413,7 @@
   Producer
   (close [_] (swap! producer-state close-mock))
   (close [_ timeout time-unit] (swap! producer-state close-mock))
-  (flush [_])
+  (flush [_] (throw (UnsupportedOperationException.)))
   (metrics [_] (throw (UnsupportedOperationException.)))
   (partitionsFor [_ topic] (throw (UnsupportedOperationException.)))
   (send [this record]
