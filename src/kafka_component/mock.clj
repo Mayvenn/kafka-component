@@ -21,13 +21,6 @@
 ;; {[topic-partition "group-id"] 10}
 (def committed-offsets (atom {}))
 
-;; structure of partition-assignments:
-;; {["topic" "group-1"] {consumer1 [0 1] ;; the partitions
-;;                                      }
-;;  ["topic" "group-2"] {consumer2 [0] consumer3 [1]}}
-(def partition-assignments (atom {}))
-
-
 (def buffer-size 20)
 (def default-num-partitions 2)
 (def consumer-backoff 20)
@@ -38,8 +31,7 @@
 
 (defn reset-state! []
   (reset! broker-state {})
-  (reset! committed-offsets {})
-  (reset! partition-assignments {}))
+  (reset! committed-offsets {}))
 
 (defn ->topic-partition [topic partition]
   (TopicPartition. topic partition))
