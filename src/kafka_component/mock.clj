@@ -113,7 +113,7 @@
   (apply-pending-topics [this topics])
   (clean-up-subscriptions [this]))
 
-(defn generate-partition-assignments [broker-state consumers participants complete-ch]
+(defn generate-partition-assignments [broker-state consumers participants participants-ch complete-ch]
   (let [broker-state @broker-state
         topics (distinct (mapcat all-topics consumers))
         topic->participants (reduce (fn [m topic]
@@ -132,6 +132,7 @@
     (doseq [consumer consumers]
       (let [assignments (consumer->assignments consumer)]
         (.assign consumer (or assignments []))))
+    (close! participants-ch)
     (close! complete-ch)))
 
 (defn perform-rebalance [broker-state consumers participants-ch complete-ch]
@@ -140,9 +141,9 @@
       participants-ch ([participant]
                        (let [participants' (conj participants participant)]
                          (if (>= (count participants') (count consumers))
-                           (generate-partition-assignments broker-state consumers participants' complete-ch)
+                           (generate-partition-assignments broker-state consumers participants' participants-ch complete-ch)
                            (recur participants'))))
-      (timeout 1000) (generate-partition-assignments broker-state consumers participants complete-ch))))
+      (timeout 1000) (generate-partition-assignments broker-state consumers participants participants-ch complete-ch))))
 
 (defn rebalance-consumers [relevant-consumers broker-state rebalance-complete-ch]
   (let [rebalance-participants-ch (chan buffer-size)]
