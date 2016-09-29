@@ -170,25 +170,27 @@
   (goe-loop []
     (alt!
       join-ch ([[consumer topics]]
-               (let [group-id (get-in consumer [:config "group.id"] "")
-                     rebalance-complete-ch (chan)]
-                 (apply-pending-topics consumer topics)
-                 (rebalance-consumers (get (swap! state update group-id (fnil conj #{}) consumer)
-                                           group-id)
-                                      broker-state
-                                      rebalance-complete-ch)
-                 (<! rebalance-complete-ch)
-                 (recur)))
+               (when consumer
+                 (let [group-id (get-in consumer [:config "group.id"] "")
+                       rebalance-complete-ch (chan)]
+                   (apply-pending-topics consumer topics)
+                   (rebalance-consumers (get (swap! state update group-id (fnil conj #{}) consumer)
+                                             group-id)
+                                        broker-state
+                                        rebalance-complete-ch)
+                   (<! rebalance-complete-ch)
+                   (recur))))
       leave-ch ([consumer]
-                (let [group-id (get-in consumer [:config "group.id"] "")
-                      rebalance-complete-ch (chan)]
-                  (clean-up-subscriptions consumer)
-                  (rebalance-consumers (get (swap! state update group-id disj consumer)
-                                            group-id)
-                                       broker-state
-                                       rebalance-complete-ch)
-                  (<! rebalance-complete-ch)
-                  (recur)))
+                (when consumer
+                  (let [group-id (get-in consumer [:config "group.id"] "")
+                        rebalance-complete-ch (chan)]
+                    (clean-up-subscriptions consumer)
+                    (rebalance-consumers (get (swap! state update group-id disj consumer)
+                                              group-id)
+                                         broker-state
+                                         rebalance-complete-ch)
+                    (<! rebalance-complete-ch)
+                    (recur))))
       close-ch nil)))
 
 (defn start! []
