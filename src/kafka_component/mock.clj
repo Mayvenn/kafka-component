@@ -267,7 +267,7 @@
   (poll [this max-timeout]
     ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
     ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
-    ;; TODO: round robin across topic-partitions?
+    ;; TODO: round robin across topic-partitions? seems not that necessary right now
     ;; TODO: assert not closed
     ;; TODO: what happens if you try to read partitions you don't "own"
     ;; TODO: it seems like we can have a long running rebalance-control-ch that sends [rebalance-participants-ch rebalance-complete-ch] and then switch the if conditions around rebalancing and waking up to an alt!! which would clean this up a bit and remove quite a few keys in the consumer-state
