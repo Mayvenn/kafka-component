@@ -1,6 +1,6 @@
 (ns kafka-component.mock
   (:require [com.stuartsierra.component :as component]
-            [clojure.core.async :as async :refer [>! <! alt! >!! <!! chan alt!! timeout close! poll! go go-loop]]
+            [clojure.core.async :as async :refer [>! <! alt! >!! <!! chan alt!! timeout close! poll! go go-loop sliding-buffer]]
             [kafka-component.core :as core])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords ConsumerRebalanceListener]
@@ -15,11 +15,13 @@
 ;; TODO: pull out some of the timeouts as constants so it's easier to see that all the timeouts make sense together
 
 ;; structure of broker-state:
-;; {"sample-topic" [{:messages [] :watchers chan} {:messages [] :watchers chan}]}
+;; {"sample-topic" [partition-state *]}
+;; where partition-state is:
+;; {:messages [first-msg second-msg] :watchers chan-of-interested-consumers}
 (def broker-state (atom {}))
 
 ;; structure of committed-offsets:
-;; {[topic-partition "group-id"] 10}
+;; {[group-id topic-partition] 10}
 (def committed-offsets (atom {}))
 
 (def buffer-size 20)
@@ -43,7 +45,7 @@
 (defn broker-create-topic
   ([] (broker-create-topic default-num-partitions))
   ([num-partitions]
-   (into [] (repeatedly num-partitions (constantly {:messages [] :watchers (chan buffer-size)})))))
+   (into [] (repeatedly num-partitions (constantly {:messages [] :watchers (chan (sliding-buffer buffer-size))})))))
 
 (defn broker-ensure-topic [broker-state topic]
   (if (broker-state topic)
@@ -65,14 +67,18 @@
         (broker-ensure-topic topic)
         (add-record-to-topic producer-record))))
 
-(defmacro goe [& body]
+(defmacro goe
+  {:style/indent 0}
+  [& body]
   `(go
      (try ~@body
           (catch Exception e#
             (do (logger e#)
                 (throw e#))))))
 
-(defmacro goe-loop [& body]
+(defmacro goe-loop
+  {:style/indent 1}
+  [& body]
   `(goe (loop ~@body)))
 
 (defn close-all-from [ch]
@@ -99,13 +105,13 @@
     (committed-record-metadata (last (:messages partition)))))
 
 (defn broker-receive-messages [state msg-ch close-ch]
-  (go-loop []
-            (alt!
-              msg-ch ([[res-ch msg]]
-                      (>! res-ch (broker-save-record! state msg))
-                      (close! res-ch)
-                      (recur))
-              close-ch nil)))
+  (goe-loop []
+    (alt!
+      msg-ch ([[res-ch msg]]
+              (>! res-ch (broker-save-record! state msg))
+              (close! res-ch)
+              (recur))
+      close-ch nil)))
 
 (defprotocol IRebalance
   (prepare-for-rebalance [this rebalance-participants-ch rebalance-complete-ch])
@@ -120,23 +126,24 @@
                                       (assoc m topic
                                              (filter #((into #{} (all-topics %)) topic) participants)))
                                     {} topics)
-        consumer->assignments (reduce (fn [m [topic participants]]
-                                        (let [partition-count (count (broker-state topic))
-                                              partition-breakdowns (partition-all (/ partition-count (max (count participants) 1)) (range partition-count))]
-                                          (merge-with concat m (into {} (map vector participants
-                                                                             (map (fn [partition-breakdown]
-                                                                                    (map (partial ->topic-partition topic) partition-breakdown))
-                                                                                  partition-breakdowns))))))
-                                      {}
-                                      topic->participants)]
+        participants->assignments (reduce (fn [m [topic participants]]
+                                            (let [partition-count (count (broker-state topic))
+                                                  ;; TODO: what to do if there are no participants in this topic? I.e. is the (max 1) safe?
+                                                  partition-breakdowns (partition-all (/ partition-count (max (count participants) 1)) (range partition-count))]
+                                              (merge-with concat m (into {} (map vector participants
+                                                                                 (map (fn [partition-breakdown]
+                                                                                        (map (partial ->topic-partition topic) partition-breakdown))
+                                                                                      partition-breakdowns))))))
+                                          {}
+                                          topic->participants)]
     (doseq [consumer consumers]
-      (let [assignments (consumer->assignments consumer)]
+      (let [assignments (participants->assignments consumer)]
         (.assign consumer (or assignments []))))
     (close! participants-ch)
     (close! complete-ch)))
 
 (defn perform-rebalance [broker-state consumers participants-ch complete-ch]
-  (go-loop [participants []]
+  (goe-loop [participants []]
     (alt!
       participants-ch ([participant]
                        (let [participants' (conj participants participant)]
@@ -152,29 +159,29 @@
     (perform-rebalance broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)))
 
 (defn consumer-coordinator [state broker-state join-ch leave-ch close-ch]
-  (go-loop []
-            (alt!
-              join-ch ([[consumer topics]]
-                       (let [group-id (get-in consumer [:config "group.id"] "")
-                             rebalance-complete-ch (chan)]
-                         (apply-pending-topics consumer topics)
-                         (rebalance-consumers (get (swap! state update group-id (fnil conj #{}) consumer)
-                                                   group-id)
-                                              broker-state
-                                              rebalance-complete-ch)
-                         (<! rebalance-complete-ch)
-                         (recur)))
-              leave-ch ([consumer]
-                        (let [group-id (get-in consumer [:config "group.id"] "")
-                              rebalance-complete-ch (chan)]
-                          (clean-up-subscriptions consumer)
-                          (rebalance-consumers (get (swap! state update group-id disj consumer)
-                                                group-id)
-                                               broker-state
-                                               rebalance-complete-ch)
-                          (<! rebalance-complete-ch)
-                          (recur)))
-              close-ch nil)))
+  (goe-loop []
+    (alt!
+      join-ch ([[consumer topics]]
+               (let [group-id (get-in consumer [:config "group.id"] "")
+                     rebalance-complete-ch (chan)]
+                 (apply-pending-topics consumer topics)
+                 (rebalance-consumers (get (swap! state update group-id (fnil conj #{}) consumer)
+                                           group-id)
+                                      broker-state
+                                      rebalance-complete-ch)
+                 (<! rebalance-complete-ch)
+                 (recur)))
+      leave-ch ([consumer]
+                (let [group-id (get-in consumer [:config "group.id"] "")
+                      rebalance-complete-ch (chan)]
+                  (clean-up-subscriptions consumer)
+                  (rebalance-consumers (get (swap! state update group-id disj consumer)
+                                            group-id)
+                                       broker-state
+                                       rebalance-complete-ch)
+                  (<! rebalance-complete-ch)
+                  (recur)))
+      close-ch nil)))
 
 (defn start! []
   (let [msg-ch (chan buffer-size)
@@ -288,10 +295,17 @@
         (if woken-up?
           (throw (WakeupException.))
           (do
-            ;; Tell broker we'll be ready when it gets more messages
+            ;; Tell broker that if it doesn't have messages now, but gets them
+            ;; while we're waiting for the timeout, we'd like to be interupted.
+            ;; This prevents excessive waiting and handles the case of an
+            ;; infinite max-timeout.
             (doseq [[topic-partition _] subscribed-topic-partitions]
               (>!! (get-in state [(.topic topic-partition) (.partition topic-partition) :watchers]) poll-chan))
-            (let [state @broker-state ;; need to re-read broker state now that the watchers are in place
+            ;; Need to re-read broker state immediately after setting watchers,
+            ;; so that we see any messages created between the time the poll
+            ;; started and when we registered. The first read of the broker
+            ;; state was just to find out where to put poll-chan
+            (let [state @broker-state
                   messages (mapcat (fn [[topic-partition read-offset]]
                                      (let [topic (.topic topic-partition)
                                            partition (.partition topic-partition)
@@ -308,16 +322,21 @@
                   (ConsumerRecords. grouped-messages))
                 ;; Maybe we didn't actually have any messages to read
                 (alt!!
-                  ;; Broker got new messsages on some topic+partition that this
-                  ;; consumer is interested in. It is possible through race conditions
-                  ;; that this signal was a lie, that is, that we already read the
-                  ;; messages the broker is trying to tell us about, but it is
-                  ;; harmless to retry as long as we back off a little bit to avoid
-                  ;; flooding the message channel
-                  poll-chan ([_] (Thread/sleep consumer-backoff) (.poll this max-timeout))
-                  ;; Or if we've waited too long for messages, give up
-                  (timeout max-timeout) ([_] nil)
-                  wakeup-chan ([_] (throw (WakeupException.)))))))))))
+                  ;; We've waited too long for messages, give up
+                  (timeout max-timeout) nil
+                  ;; But, before the timeout, broker got new messsages on some
+                  ;; topic+partition that this consumer is interested in. It is
+                  ;; possible through race conditions that this signal was a
+                  ;; lie, that is, that we already read the messages the broker
+                  ;; is trying to tell us about, but it is harmless to retry as
+                  ;; long as we back off a little bit to avoid flooding the
+                  ;; message channel
+                  poll-chan ([_]
+                             (Thread/sleep consumer-backoff)
+                             (.poll this max-timeout))
+                  ;; Somebody outside needs to shutdown quickly, and is aborting
+                  ;; the poll loop
+                  wakeup-chan (throw (WakeupException.))))))))))
   (position [_ partition])
   (resume [_ partitions])
   (seek [_ partition offset])
@@ -389,7 +408,7 @@
     (assert-producer-not-closed producer-state)
     (let [res-ch (chan 1)
           rtn-promise (promise)]
-      (go
+      (goe
         (>! msg-ch [res-ch producer-record])
         (let [committed-record-metadata (<! res-ch)]
           (.onCompletion cb committed-record-metadata nil)
