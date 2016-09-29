@@ -6,7 +6,7 @@
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
            [org.apache.kafka.common TopicPartition]
-           [org.apache.kafka.common.errors WakeupException]
+           [org.apache.kafka.common.errors WakeupException InvalidOffsetException]
            [java.util Collection]
            [java.util.regex Pattern]))
 
@@ -173,6 +173,15 @@
         (catch WakeupException e
           (deliver woken "I'm awake!"))))
     (is (= "I'm awake!" (deref woken timeout nil)))))
+
+(deftest consumer-throws-exception-on-invalid-auto-offset-reset
+  (let [consumer (mock-consumer {"auto.offset.reset" "wrong"})
+        ex (promise)]
+    (try
+      (.subscribe consumer ["topic"])
+      (catch InvalidOffsetException e
+        (deliver ex "I was wrong!")))
+    (is (= "I was wrong!" (deref ex timeout nil)))))
 
 (defn consume-messages [expected-message-count messages messages-promise msg]
   (locking expected-message-count

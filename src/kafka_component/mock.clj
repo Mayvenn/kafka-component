@@ -5,7 +5,7 @@
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords ConsumerRebalanceListener]
            [org.apache.kafka.common TopicPartition]
-           [org.apache.kafka.common.errors WakeupException]
+           [org.apache.kafka.common.errors WakeupException InvalidOffsetException]
            [java.lang Integer]
            [java.util Collection]
            [java.util.regex Pattern]))
@@ -127,16 +127,23 @@
                                       (assoc m topic
                                              (filter #((into #{} (all-topics %)) topic) participants)))
                                     {} topics)
-        participants->assignments (reduce (fn [m [topic participants]]
-                                            (let [partition-count (count (broker-state topic))
-                                                  ;; TODO: what to do if there are no participants in this topic? I.e. is the (max 1) safe?
-                                                  partition-breakdowns (partition-all (/ partition-count (max (count participants) 1)) (range partition-count))]
-                                              (merge-with concat m (into {} (map vector participants
-                                                                                 (map (fn [partition-breakdown]
-                                                                                        (map (partial ->topic-partition topic) partition-breakdown))
-                                                                                      partition-breakdowns))))))
-                                          {}
-                                          topic->participants)]
+        participants->assignments
+        (reduce (fn [m [topic participants]]
+                  (let [partition-count (count (broker-state topic))
+                        ;; NOTE: if there are no participants in this topic, we
+                        ;; avoid dividing by 0, then merge an empty map of
+                        ;; assignments. An empty list of participants flows all
+                        ;; the way through this code, though for readability it
+                        ;; could short-circuit.
+                        partition-breakdowns (partition-all (/ partition-count (max (count participants) 1))
+                                                            (range partition-count))]
+                    (merge-with concat m (into {} (map vector participants
+                                                       (map (fn [partition-breakdown]
+                                                              (map (partial ->topic-partition topic)
+                                                                   partition-breakdown))
+                                                            partition-breakdowns))))))
+                {}
+                topic->participants)]
     (doseq [consumer consumers]
       (let [assignments (participants->assignments consumer)]
         (.assign consumer (or assignments []))))
@@ -221,18 +228,19 @@
       (Integer/parseInt max-poll-records-str))
     Integer/MAX_VALUE))
 
-;; TODO: support "none"
-;; TODO: anything other than earliest, latest, none is to throw an exception
 (defn get-offset [broker-state topic partition config]
   (let [group-id (config "group.id" "")]
     (if-let [committed-offset (get @committed-offsets [group-id (->topic-partition topic partition)])]
       committed-offset
-      (let [latest-offset (count (get-in broker-state [topic partition :messages]))]
-        (case (config "auto.offset.reset")
-          "earliest" 0
-          "latest" latest-offset
-          "none" (throw (UnsupportedOperationException.))
-          latest-offset)))))
+      (case (config "auto.offset.reset")
+        "earliest" 0
+        "latest"   (count (get-in broker-state [topic partition :messages]))
+        "none"     (throw (InvalidOffsetException. (str "auto.offset.reset=none, no existing offset for group " group-id " topic " topic " partition " partition)))))))
+
+(defn assert-proper-consumer-config [config]
+  (let [auto-offset (config "auto.offset.reset")]
+    (when-not (#{"earliest" "latest" "none"} auto-offset)
+      (throw (InvalidOffsetException. (str "auto.offset.reset=" auto-offset ", invalid configuration"))))))
 
 ;; TODO: implement missing methods
 ;; TODO: validate config?
@@ -347,6 +355,7 @@
   (seekToBeginning [_ partitions])
   (seekToEnd [_ partitions])
   (^void subscribe [^Consumer this ^Collection topics]
+   (assert-proper-consumer-config config)
    ;; TODO: what if already subscribed, what does Kafka do?
    (swap! broker-state #(reduce (fn [state topic] (broker-ensure-topic state topic)) % topics))
    (>!! join-ch [this topics]))
