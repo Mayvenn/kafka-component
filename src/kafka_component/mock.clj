@@ -122,27 +122,15 @@
 (defn generate-partition-assignments [broker-state consumers participants participants-ch complete-ch]
   (let [broker-state @broker-state
         topics (distinct (mapcat all-topics consumers))
-        topic->participants (reduce (fn [m topic]
-                                      (assoc m topic
-                                             (filter #((into #{} (all-topics %)) topic) participants)))
-                                    {} topics)
+
         participants->assignments
-        (reduce (fn [m [topic participants]]
-                  (let [partition-count (count (broker-state topic))
-                        ;; NOTE: if there are no participants in this topic, we
-                        ;; avoid dividing by 0, then merge an empty map of
-                        ;; assignments. An empty list of participants flows all
-                        ;; the way through this code, though for readability it
-                        ;; could short-circuit.
-                        partition-breakdowns (partition-all (/ partition-count (max (count participants) 1))
-                                                            (range partition-count))]
-                    (merge-with concat m (into {} (map vector participants
-                                                       (map (fn [partition-breakdown]
-                                                              (map (partial ->topic-partition topic)
-                                                                   partition-breakdown))
-                                                            partition-breakdowns))))))
-                {}
-                topic->participants)]
+        (apply merge-with concat {}
+               (for [topic topics
+                     :let [subscribed-participants (filterv #(contains? (set (all-topics %)) topic) participants)]
+                     partition (range (count (broker-state topic)))
+                     :let [participant (get subscribed-participants (mod partition (max (count participants) 1)))]
+                     :when participant]
+                 {participant [(->topic-partition topic partition)]}))]
     (doseq [consumer consumers]
       (let [assignments (participants->assignments consumer)]
         (.assign consumer (or assignments []))))
