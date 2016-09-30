@@ -424,3 +424,24 @@
 
 (defn mock-producer-component [config]
   (core/->KafkaProducerComponent config mock-producer))
+
+(defn record->clj [record]
+  {:value     (.value record)
+   :key       (.key record)
+   :partition (.partition record)
+   :topic     (.topic record)
+   :offset    (.offset record)})
+
+(defn records->clj
+  ([consumer-records]
+   (if (seq consumer-records)
+     (map record->clj (iterator-seq (.iterator consumer-records)))
+     [])))
+
+(defn get-messages [consumer timeout]
+  (loop [i 5]
+    (if (> i 0)
+      (if-let [consumer-records (seq (records->clj (.poll consumer (/ timeout 5))))]
+        consumer-records
+        (recur (dec i)))
+      [])))
