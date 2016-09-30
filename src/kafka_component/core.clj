@@ -30,7 +30,7 @@
 (defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-kafka-consumer consumer-atom task-id]
   java.lang.Runnable
   (run [_]
-    (let [kafka-consumer ((or make-kafka-consumer make-default-consumer) kafka-config)
+    (let [kafka-consumer (make-kafka-consumer kafka-config)
           group-id       (kafka-config "group.id")
           log-exception  (fn log-exception [e & msg]
                            (logger :error (apply str "group=" group-id " task-id=" task-id " " msg))
@@ -65,12 +65,12 @@
     (when-let [consumer @consumer-atom]
       (gregor/wakeup consumer))))
 
-(defn make-default-task [{:keys [logger exception-handler consumer-component config]} task-id]
+(defn make-default-task [{:keys [logger exception-handler consumer-component config make-kafka-consumer]} task-id]
   (->ConsumerAlwaysCommitTask logger
                               exception-handler
                               (:consumer consumer-component)
                               (config :kafka-consumer-config)
-                              (partial make-default-consumer (config :topics-or-regex))
+                              (partial (or make-kafka-consumer make-default-consumer) (config :topics-or-regex))
                               (atom nil)
                               task-id))
 
@@ -89,7 +89,7 @@
     (.awaitTermination thread-pool (config :shutdown-grace-period 4) TimeUnit/SECONDS))
   (dissoc c :thread-pool :tasks))
 
-(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task]
+(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task make-kafka-consumer]
   component/Lifecycle
   (start [c]
     (let [pool-id (pr-str (:topics-or-regex config))
@@ -115,5 +115,5 @@
     (assoc c :producer ((or make-kafka-producer make-default-producer) config)))
   (stop [c]
     (when-let [p (:producer c)]
-      (gregor/close p 2) ;; 2 seconds to wait to send remaining messages, should this be configurable?
-      (dissoc c :producer))))
+      (gregor/close p 2)) ;; 2 seconds to wait to send remaining messages, should this be configurable?
+    (dissoc c :producer)))
