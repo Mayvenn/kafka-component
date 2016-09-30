@@ -368,11 +368,13 @@
 (defn mock-consumer
   ([config] (mock-consumer [] config))
   ([auto-subscribe-topics config]
-   (let [mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}})
+   (let [{:keys [join-ch leave-ch]} @broker-state
+         _ (assert join-ch "Broker is not running! Did you mean to call 'start!' first?")
+         mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}})
                                        (chan)
                                        (chan buffer-size)
-                                       (:join-ch @broker-state)
-                                       (:leave-ch @broker-state)
+                                       join-ch
+                                       leave-ch
                                        logger
                                        (merge core/default-consumer-config
                                               {"auto.offset.reset" "earliest"}
@@ -435,7 +437,9 @@
      (.close p timeout TimeUnit/SECONDS))))
 
 (defn mock-producer [config]
-  (->MockProducer (atom nil) (:msg-ch @broker-state) (merge core/default-producer-config config)))
+  (let [msg-ch (:msg-ch @broker-state)]
+    (assert msg-ch "Broker is not running! Did you mean to call 'start!' first?")
+    (->MockProducer (atom nil) msg-ch (merge core/default-producer-config config))))
 
 (defn mock-producer-component [config]
   (core/->KafkaProducerComponent config mock-producer))

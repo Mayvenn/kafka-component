@@ -252,3 +252,23 @@
   (with-resource [producer-component (component/start (mock-producer-component {}))]
     component/stop
     (is true "true to avoid cider's no assertion error")))
+
+(deftest producers-fail-when-broker-is-not-started
+  (shutdown!)
+  (try
+    (mock-producer {})
+    (is false "expected exception to be raised")
+    (catch Throwable e
+      (is (.contains (.getMessage e) "Broker is not running! Did you mean to call 'start!' first?")
+          (str "Got: " (.getMessage e)))))
+  (start!))
+
+(deftest consumers-fail-when-broker-is-not-started
+  (shutdown!)
+  (try
+    (mock-consumer {})
+    (is false "expected exception to be raised")
+    (catch Throwable e
+      (is (.contains (.getMessage e) "Broker is not running! Did you mean to call 'start!' first?")
+          (str "Got: " (.getMessage e)))))
+  (start!))

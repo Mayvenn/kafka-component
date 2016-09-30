@@ -89,7 +89,7 @@
     (.awaitTermination thread-pool (config :shutdown-grace-period 4) TimeUnit/SECONDS))
   (dissoc c :thread-pool :tasks))
 
-(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task make-kafka-consumer]
+(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task]
   component/Lifecycle
   (start [c]
     (let [pool-id (pr-str (:topics-or-regex config))
