@@ -232,13 +232,15 @@
     (when-not (#{"earliest" "latest" "none"} auto-offset)
       (throw (InvalidOffsetException. (str "auto.offset.reset=" auto-offset ", invalid configuration"))))))
 
-(defn ^:private desires-repoll [subscribed-topic-partitions state]
+(defn ^:private desires-repoll [state subscribed-topic-partitions]
   (let [poll-chan (chan buffer-size)]
     (doseq [[topic-partition _] subscribed-topic-partitions]
       (>!! (get-in state [(.topic topic-partition) (.partition topic-partition) :watchers]) poll-chan))
     poll-chan))
 
-(defn ^:private read-messages [subscribed-topic-partitions state config]
+(defn ^:private read-messages [state subscribed-topic-partitions config]
+  ;; TODO: round robin across topic-partitions? seems not that necessary right now
+  ;; TODO: what happens if you try to read partitions you don't "own"
   (let [messages (mapcat (fn unread-messages [[topic-partition read-offset]]
                            (let [topic (.topic topic-partition)
                                  partition (.partition topic-partition)
@@ -290,9 +292,7 @@
   (poll [this max-timeout]
     ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
     ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
-    ;; TODO: round robin across topic-partitions? seems not that necessary right now
     ;; TODO: assert not closed
-    ;; TODO: what happens if you try to read partitions you don't "own"
     (alt!!
       rebalance-control-ch ([[rebalance-participants-ch rebalance-complete-ch]]
                             (>!! rebalance-participants-ch this)
@@ -308,12 +308,12 @@
             ;; while we're waiting for the timeout, we'd like to be interupted.
             ;; This prevents excessive waiting and handles the case of an
             ;; infinite max-timeout.
-            poll-chan (desires-repoll subscribed-topic-partitions @broker-state)
+            poll-chan (desires-repoll @broker-state subscribed-topic-partitions)
             ;; Need to re-read broker state immediately after setting watchers,
             ;; so that we see any messages created between the time the poll
             ;; started and when we registered. The first read of the broker
             ;; state was just to find out where to put poll-chan
-            topic-partition->messages (read-messages subscribed-topic-partitions @broker-state config)]
+            topic-partition->messages (read-messages @broker-state subscribed-topic-partitions config)]
         (if (seq topic-partition->messages)
           (do
             (swap! consumer-state update :subscribed-topic-partitions merge (read-offsets topic-partition->messages))
