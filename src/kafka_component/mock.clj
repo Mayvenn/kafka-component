@@ -1,8 +1,12 @@
 (ns kafka-component.mock
-  (:require [clojure.core.async :refer [<! >! <!! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
+  (:require [clojure.core.async
+             :refer
+             [<! <!! >! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
+            [gregor.core :as gregor]
             [kafka-component.core :as core])
   (:import java.lang.Integer
            java.util.Collection
+           java.util.concurrent.TimeUnit
            java.util.regex.Pattern
            [org.apache.kafka.clients.consumer Consumer ConsumerRebalanceListener ConsumerRecord ConsumerRecords]
            [org.apache.kafka.clients.producer Callback Producer ProducerRecord RecordMetadata]
@@ -418,6 +422,15 @@
           (.onCompletion cb committed-record-metadata nil)
           (deliver rtn-promise committed-record-metadata)))
       (future @rtn-promise))))
+
+(extend-protocol gregor/Closeable
+  MockProducer
+  (close ([p] (.close p))
+    ([p timeout]
+     ;; Tries to close the producer cleanly within the specified timeout.
+     ;; If the close does not complete within the timeout, fail any pending send
+     ;; requests and force close the producer
+     (.close p timeout TimeUnit/SECONDS))))
 
 (defn mock-producer [config]
   (->MockProducer (atom nil) (:msg-ch @broker-state) (merge core/default-producer-config config)))

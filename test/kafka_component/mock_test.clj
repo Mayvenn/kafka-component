@@ -247,3 +247,8 @@
           (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
                   {:value "value2" :key "key2" :partition 1 :topic "topic" :offset 0}]
                  (sort-by :partition (deref group-2-received-messages 5000 [])))))))))
+
+(deftest producers-can-be-closed-by-gregor
+  (with-resource [producer-component (component/start (mock-producer-component {}))]
+    component/stop
+    (is true "true to avoid cider's no assertion error")))
