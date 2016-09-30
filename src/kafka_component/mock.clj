@@ -374,7 +374,9 @@
                                        (:join-ch @broker-state)
                                        (:leave-ch @broker-state)
                                        logger
-                                       (merge core/default-consumer-config config))]
+                                       (merge core/default-consumer-config
+                                              {"auto.offset.reset" "earliest"}
+                                              config))]
      (when (seq auto-subscribe-topics)
        (.subscribe mock-consumer auto-subscribe-topics))
      mock-consumer)))
