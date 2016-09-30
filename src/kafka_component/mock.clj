@@ -138,11 +138,16 @@
     (close! participants-ch)
     (close! complete-ch)))
 
-(defn perform-rebalance [broker-state consumers participants-ch complete-ch]
+(defn rebalance-participants
+  "Try to get all the consumers to participate in the rebalance, but if they
+  don't all check in, continue without some of them."
+  [broker-state consumers participants-ch complete-ch]
+  (doseq [c consumers]
+    (>!! (:rebalance-control-ch c) [participants-ch complete-ch]))
   (goe-loop [participants []]
     (alt!
       participants-ch ([participant]
-                       (when participant
+                       (when participant ; else, closed
                          (let [participants' (conj participants participant)]
                            (if (>= (count participants') (count consumers))
                              (assign-partitions broker-state consumers participants' participants-ch complete-ch)
@@ -151,24 +156,24 @@
 
 (defn rebalance-consumers [relevant-consumers broker-state]
   (let [rebalance-participants-ch (chan buffer-size)
+        ;; The complete ch tells each participant when they can resume polling,
+        ;; and allows the coordinator to start another rebalance
         rebalance-complete-ch     (chan)]
-    (doseq [c relevant-consumers]
-      (>!! (:rebalance-control-ch c) [rebalance-participants-ch rebalance-complete-ch]))
-    (perform-rebalance broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)
+    (rebalance-participants broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)
     (<!! rebalance-complete-ch)))
 
 (defn consumer-coordinator [state broker-state join-ch leave-ch]
   (goe-loop []
     (alt!
       join-ch ([[consumer topics]]
-               (when consumer
+               (when consumer ; else, closed
                  (let [group-id         (get-in consumer [:config "group.id"] "")
                        group->consumers (swap! state update group-id (fnil conj #{}) consumer)]
                    (apply-pending-topics consumer topics)
                    (rebalance-consumers (get group->consumers group-id) broker-state)
                    (recur))))
       leave-ch ([consumer]
-                (when consumer
+                (when consumer ; else, closed
                   (let [group-id         (get-in consumer [:config "group.id"] "")
                         group->consumers (swap! state update group-id disj consumer)]
                     (clean-up-subscriptions consumer)
