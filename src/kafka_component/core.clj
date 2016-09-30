@@ -4,11 +4,16 @@
   (:import [java.util.concurrent Executors TimeUnit]
            org.apache.kafka.common.errors.WakeupException))
 
+(defn assert-non-nil-values [m]
+  (doseq [[k v] m]
+    (assert v (format "%s cannot be nil" k))))
+
 (def default-consumer-config
   {"enable.auto.commit"	"false"
    "max.poll.records" "1"})
 
 (defn make-default-consumer [topics-or-regex kafka-config]
+  (assert-non-nil-values kafka-config)
   (gregor/consumer (kafka-config "bootstrap.servers") (kafka-config "group.id")
                    topics-or-regex (merge default-consumer-config kafka-config)))
 
@@ -18,6 +23,7 @@
    "max.in.flight.requests.per.connection" "1"})
 
 (defn make-default-producer [config]
+  (assert-non-nil-values config)
   (gregor/producer (config "bootstrap.servers")
                    (merge default-producer-config config)))
 
