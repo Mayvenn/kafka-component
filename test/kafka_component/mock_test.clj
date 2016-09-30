@@ -244,6 +244,8 @@
         (Thread/sleep (* 4 timeout))
         (is (= 2 @message-count))))))
 
+;; TODO: this test flakes out about 1/3 of the time on CI on the messages received from consumer-pool2, need
+;; some investigation as to what's going on
 (deftest multiple-consumers-in-multiple-groups-share-the-messages-appropriately
   (let [group-1-received-messages (promise)
         group-2-received-messages (promise)]
