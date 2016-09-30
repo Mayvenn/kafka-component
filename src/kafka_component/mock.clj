@@ -106,15 +106,14 @@
     (close-all-from (:watchers partition))
     (committed-record-metadata (last (:messages partition)))))
 
-(defn broker-receive-messages [state msg-ch close-ch]
+(defn broker-receive-messages [state msg-ch]
   (goe-loop []
     (alt!
       msg-ch ([[res-ch msg]]
               (when res-ch
                 (>! res-ch (broker-save-record! state msg))
                 (close! res-ch)
-                (recur)))
-      close-ch nil)))
+                (recur))))))
 
 (defprotocol IRebalance
   (all-topics [this])
@@ -158,7 +157,7 @@
     (perform-rebalance broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)
     (<!! rebalance-complete-ch)))
 
-(defn consumer-coordinator [state broker-state join-ch leave-ch close-ch]
+(defn consumer-coordinator [state broker-state join-ch leave-ch]
   (goe-loop []
     (alt!
       join-ch ([[consumer topics]]
@@ -174,23 +173,20 @@
                         group->consumers (swap! state update group-id disj consumer)]
                     (clean-up-subscriptions consumer)
                     (rebalance-consumers (get group->consumers group-id) broker-state)
-                    (recur))))
-      close-ch nil)))
+                    (recur)))))))
 
 (defn start! []
   (let [msg-ch (chan buffer-size)
-        shutdown-ch (chan)
         join-ch (chan)
         leave-ch (chan)
         ;; {"group1" #{consumer-1 consumer-2}}
         consumer-coordinator-state (atom {})]
-    (broker-receive-messages broker-state msg-ch shutdown-ch)
-    (consumer-coordinator consumer-coordinator-state broker-state join-ch leave-ch shutdown-ch)
-    (reset! broker-state {:msg-ch msg-ch :shutdown-ch shutdown-ch :join-ch join-ch :leave-ch leave-ch})))
+    (broker-receive-messages broker-state msg-ch)
+    (consumer-coordinator consumer-coordinator-state broker-state join-ch leave-ch)
+    (reset! broker-state {:msg-ch msg-ch :join-ch join-ch :leave-ch leave-ch})))
 
 (defn shutdown! []
-  (let [{:keys [shutdown-ch msg-ch join-ch leave-ch]} @broker-state]
-    (close! shutdown-ch)
+  (let [{:keys [msg-ch join-ch leave-ch]} @broker-state]
     (close! msg-ch)
     (close! join-ch)
     (close! leave-ch)
