@@ -9,7 +9,6 @@
            [org.apache.kafka.common.errors InvalidOffsetException WakeupException]
            org.apache.kafka.common.TopicPartition))
 
-;; TODO: where should all the random comm chans go, they are siblings of topics in broker state right now, weird
 ;; TODO: update README for new consumer config/constructors
 ;; TODO: pull out some of the timeouts as constants so it's easier to see that all the timeouts make sense together
 
@@ -17,6 +16,7 @@
 ;; {"sample-topic" [partition-state *]}
 ;; where partition-state is:
 ;; {:messages [first-msg second-msg] :watchers chan-of-interested-consumers}
+;; TODO: where should all the random comm chans go, they are siblings of topics in broker state right now, weird
 (def broker-state (atom {}))
 
 ;; structure of committed-offsets:
@@ -86,6 +86,8 @@
   ;; scenarios this could loop forever. Could add a max watchers param if we wanted
   ;; keep this under control or send over some sort of communication as to which
   ;; tick this occurred in to try to know when to stop? Or an entirely different design.
+  ;; It is less of a problem now that the watchers are a sliding buffer, though
+  ;; technically they could fill faster than we can drain
   (loop []
     (when-let [o (poll! ch)]
       (close! o)
@@ -186,6 +188,7 @@
         shutdown-ch (chan)
         join-ch (chan)
         leave-ch (chan)
+        ;; {"group1" #{consumer-1 consumer-2}}
         consumer-coordinator-state (atom {})]
     (broker-receive-messages broker-state msg-ch shutdown-ch)
     (consumer-coordinator consumer-coordinator-state broker-state join-ch leave-ch shutdown-ch)
@@ -290,8 +293,6 @@
   (pause [_ partitions] (throw (UnsupportedOperationException.)))
   (paused [_] (throw (UnsupportedOperationException.)))
   (poll [this max-timeout]
-    ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
-    ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
     ;; TODO: assert not closed
     (alt!!
       rebalance-control-ch ([[rebalance-participants-ch rebalance-complete-ch]]
@@ -300,6 +301,8 @@
                               rebalance-complete-ch nil
                               (timeout 2000) (throw (Exception. "dead waiting for rebalance")))
                             (.poll this max-timeout))
+
+      ;; Somebody outside needs to shutdown quickly, aborting the poll loop
       wakeup-ch (throw (WakeupException.))
 
       :default
@@ -322,6 +325,8 @@
           (alt!!
             ;; We've waited too long for messages, give up
             (timeout max-timeout) ([_]
+                                   ;; TODO: on timeout is it empty ConsumerRecords or nil? assuming nil for now
+                                   ;; TODO: what does kafka do if not subscribed to any topics? currently assuming nil
                                    ;; TODO: read one last time, maybe with (.poll this 0),
                                    ;; but avoiding an infinite loop somehow?
                                    nil)
@@ -331,7 +336,7 @@
             ;; lie, that is, that we already read the messages the broker
             ;; is trying to tell us about, but it is harmless to retry as
             ;; long as we back off a little bit to avoid flooding the
-            ;; message channel
+            ;; watchers channel
             poll-chan ([_]
                        (Thread/sleep consumer-backoff)
                        (.poll this max-timeout))
