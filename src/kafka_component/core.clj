@@ -86,17 +86,21 @@
 (defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task]
   component/Lifecycle
   (start [c]
-    (let [pool-id (pr-str (:topics-or-regex config))]
-      (logger :info (str "pool-id=" pool-id " msg=starting-consumption config=" (:kafka-consumer-config config)))
+    (let [pool-id (pr-str (:topics-or-regex config))
+          log     (fn log [& msg]
+                    (logger :info (apply str "pool-id=" pool-id " config=" (:kafka-consumer-config config) " " msg)))]
+      (log "action=starting-consumption")
       (let [initialized-component (create-task-pool c pool-id)]
-        (logger :info (str "pool-id=" pool-id " msg=started-consumption config=" (:kafka-consumer-config config)))
+        (log "action=started-consumption")
         initialized-component)))
 
   (stop [{:keys [logger] :as c}]
-    (let [pool-id (pr-str (:topics-or-regex config))]
-      (logger :info (str "pool-id=" pool-id " msg=stopping-consumption config=" (:kafka-consumer-config config)))
+    (let [pool-id (pr-str (:topics-or-regex config))
+          log     (fn log [& msg]
+                    (logger :info (apply str "pool-id=" pool-id " config=" (:kafka-consumer-config config) " " msg)))]
+      (log "action=stopping-consumption")
       (let [deinitialized-component (stop-task-pool c)]
-        (logger :info (str "pool-id=" pool-id " msg=stopped-consumption config=" (:kafka-consumer-config config)))
+        (log "action=stopped-consumption")
         deinitialized-component))))
 
 (defrecord KafkaProducerComponent [config make-kafka-producer]
