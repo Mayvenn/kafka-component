@@ -75,7 +75,7 @@
                               task-id))
 
 (defn create-task-pool [{:keys [config make-consumer-task] :as c} pool-id]
-  (let [pool-size (:pool-size config)
+  (let [pool-size   (:pool-size config)
         thread-pool (Executors/newFixedThreadPool pool-size)
         task-ids    (map (partial str pool-id "-") (range pool-size))
         tasks       (map (partial (or make-consumer-task make-default-task) c) task-ids)]
