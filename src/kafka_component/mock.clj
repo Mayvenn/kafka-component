@@ -1,5 +1,5 @@
 (ns kafka-component.mock
-  (:require [clojure.core.async :refer [<! >! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
+  (:require [clojure.core.async :refer [<! >! <!! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
             [kafka-component.core :as core])
   (:import java.lang.Integer
            java.util.Collection
@@ -121,7 +121,7 @@
   (apply-pending-topics [this topics])
   (clean-up-subscriptions [this]))
 
-(defn generate-partition-assignments [broker-state consumers participants participants-ch complete-ch]
+(defn assign-partitions [broker-state consumers participants participants-ch complete-ch]
   (let [broker-state @broker-state
         topics (distinct (mapcat all-topics consumers))
 
@@ -146,40 +146,34 @@
                        (when participant
                          (let [participants' (conj participants participant)]
                            (if (>= (count participants') (count consumers))
-                             (generate-partition-assignments broker-state consumers participants' participants-ch complete-ch)
+                             (assign-partitions broker-state consumers participants' participants-ch complete-ch)
                              (recur participants')))))
-      (timeout 1000) (generate-partition-assignments broker-state consumers participants participants-ch complete-ch))))
+      (timeout 1000) (assign-partitions broker-state consumers participants participants-ch complete-ch))))
 
-(defn rebalance-consumers [relevant-consumers broker-state rebalance-complete-ch]
-  (let [rebalance-participants-ch (chan buffer-size)]
+(defn rebalance-consumers [relevant-consumers broker-state]
+  (let [rebalance-participants-ch (chan buffer-size)
+        rebalance-complete-ch     (chan)]
     (doseq [c relevant-consumers]
       (>!! (:rebalance-control-ch c) [rebalance-participants-ch rebalance-complete-ch]))
-    (perform-rebalance broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)))
+    (perform-rebalance broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)
+    (<!! rebalance-complete-ch)))
 
 (defn consumer-coordinator [state broker-state join-ch leave-ch close-ch]
   (goe-loop []
     (alt!
       join-ch ([[consumer topics]]
                (when consumer
-                 (let [group-id (get-in consumer [:config "group.id"] "")
-                       rebalance-complete-ch (chan)]
+                 (let [group-id         (get-in consumer [:config "group.id"] "")
+                       group->consumers (swap! state update group-id (fnil conj #{}) consumer)]
                    (apply-pending-topics consumer topics)
-                   (rebalance-consumers (get (swap! state update group-id (fnil conj #{}) consumer)
-                                             group-id)
-                                        broker-state
-                                        rebalance-complete-ch)
-                   (<! rebalance-complete-ch)
+                   (rebalance-consumers (get group->consumers group-id) broker-state)
                    (recur))))
       leave-ch ([consumer]
                 (when consumer
-                  (let [group-id (get-in consumer [:config "group.id"] "")
-                        rebalance-complete-ch (chan)]
+                  (let [group-id         (get-in consumer [:config "group.id"] "")
+                        group->consumers (swap! state update group-id disj consumer)]
                     (clean-up-subscriptions consumer)
-                    (rebalance-consumers (get (swap! state update group-id disj consumer)
-                                              group-id)
-                                         broker-state
-                                         rebalance-complete-ch)
-                    (<! rebalance-complete-ch)
+                    (rebalance-consumers (get group->consumers group-id) broker-state)
                     (recur))))
       close-ch nil)))
 
