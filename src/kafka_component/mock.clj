@@ -429,6 +429,8 @@
           (deliver rtn-promise committed-record-metadata)))
       (future @rtn-promise))))
 
+;; Gregor adds a method to the kafka producer, so our producer needs the
+;; method as well
 (extend-protocol gregor/Closeable
   MockProducer
   (close ([p] (.close p))
