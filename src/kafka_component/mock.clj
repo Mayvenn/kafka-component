@@ -14,7 +14,6 @@
            org.apache.kafka.common.TopicPartition))
 
 ;; TODO: update README for new consumer config/constructors
-;; TODO: pull out some of the timeouts as constants so it's easier to see that all the timeouts make sense together
 
 ;; structure of broker-state:
 ;; {"sample-topic" [partition-state *]}
@@ -30,6 +29,9 @@
 (def buffer-size 20)
 (def default-num-partitions 2)
 (def consumer-backoff 20)
+(def rebalance-participants-timeout 1000)
+(def consumer-rebalance-timeout 2000)
+(def consumer-unsubscribe-timeout 5000)
 
 (defn logger [& args]
   (locking println
@@ -156,7 +158,7 @@
                            (if (>= (count participants') (count consumers))
                              (assign-partitions broker-state consumers participants' participants-ch complete-ch)
                              (recur participants')))))
-      (timeout 1000) (assign-partitions broker-state consumers participants participants-ch complete-ch))))
+      (timeout rebalance-participants-timeout) (assign-partitions broker-state consumers participants participants-ch complete-ch))))
 
 (defn rebalance-consumers [relevant-consumers broker-state]
   (let [rebalance-participants-ch (chan buffer-size)
@@ -298,7 +300,7 @@
                             (>!! rebalance-participants-ch this)
                             (alt!!
                               rebalance-complete-ch nil
-                              (timeout 2000) (throw (Exception. "dead waiting for rebalance")))
+                              (timeout consumer-rebalance-timeout) (throw (Exception. "dead waiting for rebalance")))
                             (.poll this max-timeout))
 
       ;; Somebody outside needs to shutdown quickly, aborting the poll loop
@@ -361,7 +363,7 @@
   (unsubscribe [this]
     (alt!!
       [[leave-ch this]] :wrote
-      (timeout 5000) (throw (Exception. "dead waiting to unsubscribe"))))
+      (timeout consumer-unsubscribe-timeout) (throw (Exception. "dead waiting to unsubscribe"))))
   (wakeup [_]
     (close! wakeup-ch)))
 
