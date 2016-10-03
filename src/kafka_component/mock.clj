@@ -379,7 +379,6 @@
                                        leave-ch
                                        logger
                                        (merge core/default-consumer-config
-                                              {"auto.offset.reset" "earliest"}
                                               config))]
      (when (seq auto-subscribe-topics)
        (.subscribe mock-consumer auto-subscribe-topics))
