@@ -17,4 +17,4 @@
                         [embedded-kafka "0.4.0"]]
          :plugins [[lein-cljfmt "0.3.0"]]
          :injections [(require 'diff-eq.core)
-                      (diff-eq.core/diff!)]}} )
+                      (diff-eq.core/diff!)]}})
