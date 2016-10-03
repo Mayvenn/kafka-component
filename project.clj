@@ -1,4 +1,4 @@
-(defproject kafka-component "0.3.0"
+(defproject kafka-component "0.3.1-SNAPSHOT"
   :description "A kafka component to consume from Kafka"
   :url "https://github.com/Mayvenn/kafka-component"
   :license {:name "Eclipse Public License"
