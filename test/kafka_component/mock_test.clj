@@ -272,3 +272,11 @@
       (is (.contains (.getMessage e) "Broker is not running! Did you mean to call 'start!' first?")
           (str "Got: " (.getMessage e)))))
   (start!))
+
+(deftest consumers-fail-when-auto-offset-reset-is-invalid
+  (try
+    (mock-consumer {"auto.offset.reset" "a-cat"})
+    (is false "expected exception to be raised")
+    (catch Throwable e
+      (is (.contains (.getMessage e) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
+          (str "Got: " (.getMessage e))))))

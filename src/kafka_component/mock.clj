@@ -367,11 +367,15 @@
   (wakeup [_]
     (close! wakeup-ch)))
 
+(defn consumer-assertions [config]
+  (assert (:join-ch @broker-state) "Broker is not running! Did you mean to call 'start!' first?")
+  (assert (#{"latest" "earliest" "none"} (get config "auto.offset.reset")) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}"))
+
 (defn mock-consumer
   ([config] (mock-consumer [] config))
   ([auto-subscribe-topics config]
+   (consumer-assertions config)
    (let [{:keys [join-ch leave-ch]} @broker-state
-         _ (assert join-ch "Broker is not running! Did you mean to call 'start!' first?")
          mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}})
                                        (chan)
                                        (chan buffer-size)
