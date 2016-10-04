@@ -50,7 +50,8 @@
     (is (= 0 (.offset res)))))
 
 (defn create-mocks []
-  [(mock-producer {}) (mock-consumer {"auto.offset.reset" "earliest"})])
+  [(mock-producer {}) (mock-consumer {"auto.offset.reset" "earliest"
+                                      "bootstrap.servers" "localhost:fake"})])
 
 (deftest consumer-can-receive-message-sent-after-subscribing
   (let [[producer consumer] (create-mocks)]
@@ -62,6 +63,7 @@
 (deftest consumer-can-receive-message-from-different-partitions
   (let [producer (mock-producer {})
         consumer (mock-consumer {"max.poll.records" "2"
+                                 "bootstrap.servers" "localhost:fake"
                                  "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic"])
     @(.send producer (producer-record "topic" "key" "value" 0))
@@ -73,6 +75,7 @@
 (deftest consumer-can-limit-number-of-messages-polled
   (let [producer (mock-producer {})
         consumer (mock-consumer {"max.poll.records" "1"
+                                 "bootstrap.servers" "localhost:fake"
                                  "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic"])
     @(.send producer (producer-record "topic" "key" "value"))
@@ -84,7 +87,8 @@
 
 (deftest consumer-can-receive-message-sent-before-subscribing
   (let [producer (mock-producer {})
-        consumer (mock-consumer {"auto.offset.reset" "earliest"})]
+        consumer (mock-consumer {"auto.offset.reset" "earliest"
+                                 "bootstrap.servers" "localhost:fake"})]
     @(.send producer (producer-record "topic" "key" "value"))
     (.subscribe consumer ["topic"])
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
@@ -92,7 +96,8 @@
 
 (deftest consumer-can-use-latest-auto-offset-reset-to-skip-earlier-messages
   (let [producer (mock-producer {})
-        consumer (mock-consumer {"auto.offset.reset" "latest"})]
+        consumer (mock-consumer {"auto.offset.reset" "latest"
+                                 "bootstrap.servers" "localhost:fake"})]
     @(.send producer (producer-record "topic" "key" "value"))
     (.subscribe consumer ["topic"])
     (is (= [] (get-messages consumer timeout)))))
@@ -100,6 +105,7 @@
 (deftest consumer-can-receive-messages-from-multiple-topics
   (let [producer (mock-producer {})
         consumer (mock-consumer {"max.poll.records" "2"
+                                 "bootstrap.servers" "localhost:fake"
                                  "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic" "topic2"])
     @(.send producer (producer-record "topic" "key" "value"))
@@ -119,6 +125,7 @@
 (deftest consumer-can-unsubscribe-from-topics
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "earliest"
+                                 "bootstrap.servers" "localhost:fake"
                                  "max.poll.records" "2"})]
     (.subscribe consumer ["topic" "topic2"])
     @(.send producer (producer-record "topic" "key" "value"))
@@ -134,7 +141,8 @@
     (is (= [] (get-messages consumer timeout)))))
 
 (deftest consumer-can-be-woken-up
-  (let [consumer (mock-consumer {"auto.offset.reset" "earliest"})
+  (let [consumer (mock-consumer {"auto.offset.reset" "earliest"
+                                 "bootstrap.servers" "localhost:fake"})
         woken (promise)]
     (.subscribe consumer ["topic"])
     (future
@@ -147,7 +155,8 @@
     (is (= "I'm awake!" (deref woken timeout nil)))))
 
 (deftest consumer-can-be-woken-up-outside-of-poll-and-poll-still-throws-wakeup-exception
-  (let [consumer (mock-consumer {"auto.offset.reset" "earliest"})
+  (let [consumer (mock-consumer {"auto.offset.reset" "earliest"
+                                 "bootstrap.servers" "localhost:fake"})
         woken (promise)]
     (.subscribe consumer ["topic"])
     (.wakeup consumer)
@@ -159,15 +168,6 @@
           (deliver woken "I'm awake!"))))
     (is (= "I'm awake!" (deref woken timeout nil)))))
 
-(deftest consumer-throws-exception-on-invalid-auto-offset-reset
-  (let [consumer (mock-consumer {"auto.offset.reset" "wrong"})
-        ex (promise)]
-    (try
-      (.subscribe consumer ["topic"])
-      (catch InvalidOffsetException e
-        (deliver ex "I was wrong!")))
-    (is (= "I was wrong!" (deref ex timeout nil)))))
-
 (defn consume-messages [expected-message-count messages messages-promise msg]
   (locking expected-message-count
     (let [updated-messages (swap! messages conj msg)]
@@ -178,6 +178,7 @@
   (mock-consumer-pool (merge {:topics-or-regex []
                               :pool-size 1
                               :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                      "bootstrap.servers" "localhost:fake"
                                                       "group.id" "test-group"}} config)
                       {:consumer (partial consume-messages expected-message-count (atom []) received-messages)}
                       logger logger))
@@ -185,6 +186,8 @@
 (deftest consumer-pool-can-be-started-to-consume-messages
   (let [received-messages (promise)]
     (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
+                                                                   :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                                                           "bootstrap.servers" "localhost:fake"}
                                                                    :pool-size 1}
                                                                   2 received-messages))]
       component/stop
@@ -213,6 +216,7 @@
     (with-resource [consumer-pool (component/start (mock-consumer-pool {:topics-or-regex ["topic"]
                                                                         :pool-size 2
                                                                         :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                                                                "bootstrap.servers" "localhost:fake"
                                                                                                 "group.id" "test-group"}}
                                                                        {:consumer (fn [msg] (swap! message-count inc))}
                                                                        logger logger))]
@@ -229,12 +233,14 @@
     (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
                                                                    :pool-size 2
                                                                    :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                                                           "bootstrap.servers" "localhost:fake"
                                                                                            "group.id" "group1"}}
                                                                   2 group-1-received-messages))]
       component/stop
       (with-resource [consumer-pool2 (component/start (new-mock-pool {:topics-or-regex ["topic"]
                                                                       :pool-size 2
                                                                       :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                                                              "bootstrap.servers" "localhost:fake"
                                                                                               "group.id" "group2"}}
                                                                      2 group-2-received-messages))]
         component/stop
@@ -266,7 +272,7 @@
 (deftest consumers-fail-when-broker-is-not-started
   (shutdown!)
   (try
-    (mock-consumer {})
+    (mock-consumer {"auto.offset.reset" "none"})
     (is false "expected exception to be raised")
     (catch Throwable e
       (is (.contains (.getMessage e) "Broker is not running! Did you mean to call 'start!' first?")
@@ -279,4 +285,12 @@
     (is false "expected exception to be raised")
     (catch Throwable e
       (is (.contains (.getMessage e) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
+          (str "Got: " (.getMessage e))))))
+
+(deftest consumers-fail-when-bootstrap-servers-is-missing
+  (try
+    (mock-consumer {"auto.offset.reset" "none"})
+    (is false "expected exception to be raised")
+    (catch Throwable e
+      (is (.contains (.getMessage e) "\"bootstrap.servers\" must be provided in config")
           (str "Got: " (.getMessage e))))))

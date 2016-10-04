@@ -369,7 +369,8 @@
 
 (defn consumer-assertions [config]
   (assert (:join-ch @broker-state) "Broker is not running! Did you mean to call 'start!' first?")
-  (assert (#{"latest" "earliest" "none"} (get config "auto.offset.reset")) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}"))
+  (assert (#{"latest" "earliest" "none"} (get config "auto.offset.reset")) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
+  (assert (get config "bootstrap.servers") "\"bootstrap.servers\" must be provided in config"))
 
 (defn mock-consumer
   ([config] (mock-consumer [] config))
