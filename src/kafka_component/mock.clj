@@ -31,7 +31,7 @@
 (def buffer-size 20)
 (def default-num-partitions 2)
 (def consumer-backoff 20)
-(def rebalance-participants-timeout 1000)
+(def rebalance-participants-timeout 2000)
 (def consumer-rebalance-timeout 2000)
 (def consumer-unsubscribe-timeout 5000)
 
@@ -258,10 +258,11 @@
                            (let [topic (.topic topic-partition)
                                  partition (.partition topic-partition)
                                  messages (get-in state [topic partition :messages])]
-                             (logger (format "-- [consumer %s] read-offset=%d max-offset=%d"
+                             (logger (format "-- [consumer %s] read-offset=%d max-offset=%d topic=%s"
                                              (get config "group.id")
                                              read-offset
-                                             (count messages)))
+                                             (count messages)
+                                             topic))
                              (when (< read-offset (count messages))
                                (subvec messages read-offset))))
                          subscribed-topic-partitions)]
@@ -389,7 +390,8 @@
 (defn consumer-assertions [config]
   (assert (:join-ch @broker-state) "Broker is not running! Did you mean to call 'start!' first?")
   (assert (#{"latest" "earliest" "none"} (get config "auto.offset.reset")) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
-  (assert (get config "bootstrap.servers") "\"bootstrap.servers\" must be provided in config"))
+  (assert (get config "bootstrap.servers") "\"bootstrap.servers\" must be provided in config")
+  (assert (get config "group.id") "\"group.id\" must be provided in config"))
 
 (defn mock-consumer
   ([config] (mock-consumer [] config))

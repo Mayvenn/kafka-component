@@ -92,6 +92,7 @@
 (defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task]
   component/Lifecycle
   (start [c]
+    (assert (not= (:shutdown-grace-period config) 0) "\"shutdown-grace-period\" must not be zero")
     (let [pool-id (pr-str (:topics-or-regex config))
           log     (fn log [& msg]
                     (logger :info (apply str "pool-id=" pool-id " config=" (:kafka-consumer-config config) " " msg)))]

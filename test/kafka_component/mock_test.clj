@@ -2,7 +2,8 @@
   (:require [kafka-component.mock :refer :all]
             [clojure.test :refer :all]
             [kafka-component.core-test :refer [with-resource]]
-            [com.stuartsierra.component :as component])
+            [com.stuartsierra.component :as component]
+            [kafka-component.core :as core])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
            [org.apache.kafka.common TopicPartition]
@@ -51,6 +52,7 @@
 
 (defn create-mocks []
   [(mock-producer {}) (mock-consumer {"auto.offset.reset" "earliest"
+                                      "group.id" "test"
                                       "bootstrap.servers" "localhost:fake"})])
 
 (deftest consumer-can-receive-message-sent-after-subscribing
@@ -64,6 +66,7 @@
   (let [producer (mock-producer {})
         consumer (mock-consumer {"max.poll.records" "2"
                                  "bootstrap.servers" "localhost:fake"
+                                 "group.id" "test"
                                  "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic"])
     @(.send producer (producer-record "topic" "key" "value" 0))
@@ -76,6 +79,7 @@
   (let [producer (mock-producer {})
         consumer (mock-consumer {"max.poll.records" "1"
                                  "bootstrap.servers" "localhost:fake"
+                                 "group.id" "test"
                                  "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic"])
     @(.send producer (producer-record "topic" "key" "value"))
@@ -88,6 +92,7 @@
 (deftest consumer-can-receive-message-sent-before-subscribing
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "earliest"
+                                 "group.id" "test"
                                  "bootstrap.servers" "localhost:fake"})]
     @(.send producer (producer-record "topic" "key" "value"))
     (.subscribe consumer ["topic"])
@@ -97,6 +102,7 @@
 (deftest consumer-can-use-latest-auto-offset-reset-to-skip-earlier-messages
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "latest"
+                                 "group.id" "test"
                                  "bootstrap.servers" "localhost:fake"})]
     @(.send producer (producer-record "topic" "key" "value"))
     (.subscribe consumer ["topic"])
@@ -105,6 +111,7 @@
 (deftest consumer-can-receive-messages-from-multiple-topics
   (let [producer (mock-producer {})
         consumer (mock-consumer {"max.poll.records" "2"
+                                 "group.id" "test"
                                  "bootstrap.servers" "localhost:fake"
                                  "auto.offset.reset" "earliest"})]
     (.subscribe consumer ["topic" "topic2"])
@@ -125,6 +132,7 @@
 (deftest consumer-can-unsubscribe-from-topics
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "earliest"
+                                 "group.id" "test"
                                  "bootstrap.servers" "localhost:fake"
                                  "max.poll.records" "2"})]
     (.subscribe consumer ["topic" "topic2"])
@@ -142,7 +150,8 @@
 
 (deftest consumer-can-be-woken-up
   (let [consumer (mock-consumer {"auto.offset.reset" "earliest"
-                                 "bootstrap.servers" "localhost:fake"})
+                                 "bootstrap.servers" "localhost:fake"
+                                 "group.id" "test"})
         woken (promise)]
     (.subscribe consumer ["topic"])
     (future
@@ -156,7 +165,8 @@
 
 (deftest consumer-can-be-woken-up-outside-of-poll-and-poll-still-throws-wakeup-exception
   (let [consumer (mock-consumer {"auto.offset.reset" "earliest"
-                                 "bootstrap.servers" "localhost:fake"})
+                                 "bootstrap.servers" "localhost:fake"
+                                 "group.id" "test"})
         woken (promise)]
     (.subscribe consumer ["topic"])
     (.wakeup consumer)
@@ -179,7 +189,8 @@
                               :pool-size 1
                               :kafka-consumer-config {"auto.offset.reset" "earliest"
                                                       "bootstrap.servers" "localhost:fake"
-                                                      "group.id" "test-group"}} config)
+                                                      "group.id" "test-group"}}
+                             config)
                       {:consumer (partial consume-messages expected-message-count (atom []) received-messages)}
                       logger logger))
 
@@ -187,6 +198,7 @@
   (let [received-messages (promise)]
     (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
                                                                    :kafka-consumer-config {"auto.offset.reset" "earliest"
+                                                                                           "group.id" "test"
                                                                                            "bootstrap.servers" "localhost:fake"}
                                                                    :pool-size 1}
                                                                   2 received-messages))]
@@ -293,4 +305,21 @@
     (is false "expected exception to be raised")
     (catch Throwable e
       (is (.contains (.getMessage e) "\"bootstrap.servers\" must be provided in config")
+          (str "Got: " (.getMessage e))))))
+
+(deftest consumers-fail-when-group-id-is-missing
+  (try
+    (mock-consumer {"auto.offset.reset" "none"
+                    "bootstrap.servers" "localhost:fake"})
+    (is false "expected exception to be raised")
+    (catch Throwable e
+      (is (.contains (.getMessage e) "\"group.id\" must be provided in config")
+          (str "Got: " (.getMessage e))))))
+
+(deftest consumers-fail-when-shutdown-grace-period-is-zero
+  (try
+    (component/start (new-mock-pool {:shutdown-grace-period 0} 0 (promise)))
+    (is false "expected exception to be raised")
+    (catch Throwable e
+      (is (.contains (.getMessage e) "\"shutdown-grace-period\" must not be zero")
           (str "Got: " (.getMessage e))))))
