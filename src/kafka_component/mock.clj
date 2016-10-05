@@ -15,6 +15,8 @@
 
 ;; TODO: update README for new consumer config/constructors
 
+(def debug (atom false))
+
 ;; structure of broker-state:
 ;; {"sample-topic" [partition-state *]}
 ;; where partition-state is:
@@ -34,8 +36,9 @@
 (def consumer-unsubscribe-timeout 5000)
 
 (defn logger [& args]
-  (locking println
-    (apply println args)))
+  (when @debug
+    (locking println
+      (apply println args))))
 
 (defn reset-state! []
   ;; TODO: wait until everyone is shutdown before clearing these
@@ -138,6 +141,9 @@
                      :let [participant (get subscribed-participants (mod partition (max (count participants) 1)))]
                      :when participant]
                  {participant [(->topic-partition topic partition)]}))]
+    (logger "-- [consumer-coordinator] topics" (pr-str topics))
+    (logger "-- [consumer-coordinator] consumers" (pr-str consumers))
+    (logger "-- [consumer-coordinator] assignments" (pr-str participants->assignments))
     (doseq [consumer consumers]
       (let [assignments (participants->assignments consumer)]
         (.assign consumer (or assignments []))))
@@ -196,6 +202,9 @@
     (consumer-coordinator consumer-coordinator-state broker-state join-ch leave-ch)
     (reset! broker-state {:msg-ch msg-ch :join-ch join-ch :leave-ch leave-ch})))
 
+(defn debug! [enable]
+  (reset! debug enable))
+
 (defn shutdown! []
   (let [{:keys [msg-ch join-ch leave-ch]} @broker-state]
     (close! msg-ch)
@@ -249,6 +258,10 @@
                            (let [topic (.topic topic-partition)
                                  partition (.partition topic-partition)
                                  messages (get-in state [topic partition :messages])]
+                             (logger (format "-- [consumer %s] read-offset=%d max-offset=%d"
+                                             (get config "group.id")
+                                             read-offset
+                                             (count messages)))
                              (when (< read-offset (count messages))
                                (subvec messages read-offset))))
                          subscribed-topic-partitions)]
@@ -262,17 +275,20 @@
   IRebalance
   (all-topics [_] (:subscribed-topics @consumer-state))
   (apply-pending-topics [_ topics]
-    (swap! consumer-state assoc :subscribed-topics topics))
+    (swap! consumer-state #(assoc % :subscribed-topics topics)))
   (clean-up-subscriptions [_]
-    (swap! consumer-state assoc :subscribed-topics [] :subscribed-topic-partitions {}))
+    (swap! consumer-state #(assoc % :subscribed-topics [] :subscribed-topic-partitions {})))
   Consumer
   (assign [_ partitions]
+    (logger (format "-- [consumer %s] subscribe to partitions: %s"
+                    (get config "group.id")
+                    (pr-str partitions)))
     (let [broker-state @broker-state]
-      (swap! consumer-state assoc :subscribed-topic-partitions
-             (reduce (fn [m topic-partition]
-                       (assoc m topic-partition
-                              (get-offset broker-state (.topic topic-partition) (.partition topic-partition) config)))
-                     {} partitions))))
+      (swap! consumer-state #(assoc % :subscribed-topic-partitions
+                                    (reduce (fn [m topic-partition]
+                                              (assoc m topic-partition
+                                                     (get-offset broker-state (.topic topic-partition) (.partition topic-partition) config)))
+                                            {} partitions)))))
   (close [this]
     (swap! consumer-state close-mock)
     (.unsubscribe this))
@@ -320,7 +336,7 @@
             topic-partition->messages (read-messages @broker-state subscribed-topic-partitions config)]
         (if (seq topic-partition->messages)
           (do
-            (swap! consumer-state update :subscribed-topic-partitions merge (read-offsets topic-partition->messages))
+            (swap! consumer-state #(update % :subscribed-topic-partitions merge (read-offsets topic-partition->messages)))
             (ConsumerRecords. topic-partition->messages))
           ;; Maybe we didn't actually have any messages to read
           (alt!!
@@ -352,6 +368,9 @@
   (seekToBeginning [_ partitions] (throw (UnsupportedOperationException.)))
   (seekToEnd [_ partitions] (throw (UnsupportedOperationException.)))
   (^void subscribe [^Consumer this ^Collection topics]
+   (logger (format "-- [consumer %s] subscribe to topics: %s"
+                   (get config "group.id")
+                   (pr-str (seq topics))))
    (assert-proper-consumer-config config)
    ;; TODO: what if already subscribed, what does Kafka do?
    (swap! broker-state #(reduce (fn [state topic] (broker-ensure-topic state topic)) % topics))
@@ -424,6 +443,7 @@
     (assert-proper-config config)
     (assert-proper-record producer-record)
     (assert-producer-not-closed producer-state)
+    (logger "--MockProducer send" (pr-str producer-record))
     (let [res-ch (chan 1)
           rtn-promise (promise)]
       (goe
