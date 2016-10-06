@@ -420,7 +420,7 @@
    (core/map->KafkaConsumerPool {:config config
                                  :make-consumer-task mock-consumer-task}))
   ([config consumer-component logger exception-handler]
-   (core/->KafkaConsumerPool config consumer-component logger exception-handler mock-consumer-task)))
+   (core/->KafkaConsumerPool config consumer-component logger exception-handler mock-consumer-task mock-consumer)))
 
 ;; TODO: assertions
 (defn assert-proper-config [config])

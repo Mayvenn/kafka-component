@@ -19,6 +19,7 @@
                            {}
                            println
                            println
+                           nil
                            nil))
      {:consumer-component {:consumer-component :message-consumer}})))
 
