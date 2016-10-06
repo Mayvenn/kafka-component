@@ -494,3 +494,19 @@
         consumer-records
         (recur (dec i)))
       [])))
+
+(defmacro with-test-broker [& body]
+  `(do
+     (start!)
+     (try
+       ~@body
+       (finally (shutdown!)))))
+
+(defmacro with-test-producer-consumer [producer-name consumer-name & body]
+  `(with-test-broker
+    (let [~producer-name (mock-producer {})
+          ~consumer-name (mock-consumer {"bootstrap.servers" "localhost:fake"
+                                         "auto.offset.reset" "earliest"
+                                         "group.id" "test"
+                                         "max.poll.records" "1000"})]
+      ~@body)))
