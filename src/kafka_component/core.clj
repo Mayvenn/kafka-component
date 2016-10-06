@@ -89,7 +89,7 @@
     (.awaitTermination thread-pool (config :shutdown-grace-period 4) TimeUnit/SECONDS))
   (dissoc c :thread-pool :tasks))
 
-(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task]
+(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task make-kafka-consumer]
   component/Lifecycle
   (start [c]
     (assert (not= (:shutdown-grace-period config) 0) "\"shutdown-grace-period\" must not be zero")
