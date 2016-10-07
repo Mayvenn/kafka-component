@@ -108,7 +108,7 @@
       (log-action "stopped-consumption")
       deinitialized-component)))
 
-(defrecord KafkaConsumerTaskFactory [logger exception-handler consumer-component kafka-consumer-opts]
+(defrecord AlwaysCommitTaskFactory [logger exception-handler consumer-component kafka-consumer-opts]
   ConsumerTaskFactory
   (build-task [_ topics-or-regex task-id]
     (->ConsumerAlwaysCommitTask logger

@@ -25,7 +25,7 @@
                   :message-consumer {:consumer (juxt (partial deliver messages) (partial prn "Message consumed: "))}
                   :producer-factory (map->KafkaProducerFactory {})
                   :producer-component (map->ProducerComponent {})
-                  :test-event-consumer-task-factory (map->KafkaConsumerTaskFactory {})
+                  :test-event-consumer-task-factory (map->AlwaysCommitTaskFactory {})
                   :test-event-consumer-pool (map->ConsumerPoolComponent {:pool-config (:test-event-consumer-pool-config config)})))
       {:producer-factory [:kafka-producer-opts]
        :producer-component [:producer-factory]
