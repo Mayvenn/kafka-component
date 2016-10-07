@@ -4,6 +4,12 @@
   (:import [java.util.concurrent Executors TimeUnit]
            org.apache.kafka.common.errors.WakeupException))
 
+(defprotocol ProducerFactory
+  (build-producer [this]))
+
+(defprotocol ConsumerTaskFactory
+  (build-task [this topics-or-regex task-id]))
+
 (defn assert-non-nil-values [m]
   (doseq [[k v] m]
     (assert v (format "%s cannot be nil" k))))
@@ -65,55 +71,63 @@
     (when-let [consumer @consumer-atom]
       (gregor/wakeup consumer))))
 
-(defn make-default-task [{:keys [logger exception-handler consumer-component config make-kafka-consumer]} task-id]
-  (->ConsumerAlwaysCommitTask logger
-                              exception-handler
-                              (:consumer consumer-component)
-                              (config :kafka-consumer-config)
-                              (partial (or make-kafka-consumer make-default-consumer) (config :topics-or-regex))
-                              (atom nil)
-                              task-id))
-
-(defn create-task-pool [{:keys [config make-consumer-task] :as c} pool-id]
-  (let [pool-size   (:pool-size config)
+(defn init-and-start-task-pool [{:keys [pool-config pool-id consumer-task-factory] :as task-pool}]
+  (let [pool-size   (:pool-size pool-config)
         thread-pool (Executors/newFixedThreadPool pool-size)
         task-ids    (map (partial str pool-id "-") (range pool-size))
-        tasks       (map (partial (or make-consumer-task make-default-task) c) task-ids)]
+        tasks       (map (partial build-task consumer-task-factory (:topics-or-regex pool-config)) task-ids)]
     (doseq [t tasks] (.submit thread-pool t))
-    (merge c {:thread-pool thread-pool :tasks tasks})))
+    (merge task-pool {:thread-pool thread-pool
+                      :tasks tasks})))
 
-(defn stop-task-pool [{:keys [config thread-pool tasks] :as c}]
+(defn stop-task-pool [{:keys [pool-config thread-pool tasks] :as task-pool}]
   (doseq [t tasks] (.close t))
   (when thread-pool
     (.shutdown thread-pool)
-    (.awaitTermination thread-pool (config :shutdown-grace-period 4) TimeUnit/SECONDS))
-  (dissoc c :thread-pool :tasks))
+    (.awaitTermination thread-pool (pool-config :shutdown-grace-period 4) TimeUnit/SECONDS))
+  (dissoc task-pool :thread-pool :tasks))
 
-(defrecord KafkaConsumerPool [config consumer-component logger exception-handler make-consumer-task make-kafka-consumer]
+(defn log [logger pool-id pool-config & msg]
+  (logger :info (apply str "pool-id=" pool-id " pool-config=" pool-config " " msg)))
+
+(defrecord ConsumerPoolComponent [logger exception-handler pool-config consumer-task-factory]
   component/Lifecycle
-  (start [c]
-    (assert (not= (:shutdown-grace-period config) 0) "\"shutdown-grace-period\" must not be zero")
-    (let [pool-id (pr-str (:topics-or-regex config))
-          log     (fn log [& msg]
-                    (logger :info (apply str "pool-id=" pool-id " config=" (:kafka-consumer-config config) " " msg)))]
-      (log "action=starting-consumption")
-      (let [initialized-component (create-task-pool c pool-id)]
-        (log "action=started-consumption")
+  (start [this]
+    (let [pool-id (pr-str (:topics-or-regex pool-config))
+          log-action (partial log logger pool-id pool-config " action=")
+          this (assoc this :log-action log-action :pool-id pool-id)]
+      (assert (not= (:shutdown-grace-period pool-config) 0) "\"shutdown-grace-period\" must not be zero")
+      (log-action "starting-consumption")
+      (let [initialized-component (init-and-start-task-pool this)]
+        (log-action "started-consumption")
         initialized-component)))
 
-  (stop [{:keys [logger] :as c}]
-    (let [pool-id (pr-str (:topics-or-regex config))
-          log     (fn log [& msg]
-                    (logger :info (apply str "pool-id=" pool-id " config=" (:kafka-consumer-config config) " " msg)))]
-      (log "action=stopping-consumption")
-      (let [deinitialized-component (stop-task-pool c)]
-        (log "action=stopped-consumption")
-        deinitialized-component))))
+  (stop [{:keys [logger log-action pool-id] :as this}]
+    (log-action "stopping-consumption")
+    (let [deinitialized-component (stop-task-pool this)]
+      (log-action "stopped-consumption")
+      deinitialized-component)))
 
-(defrecord KafkaProducerComponent [config make-kafka-producer]
+(defrecord KafkaConsumerTaskFactory [logger exception-handler consumer-component kafka-consumer-opts]
+  ConsumerTaskFactory
+  (build-task [_ topics-or-regex task-id]
+    (->ConsumerAlwaysCommitTask logger
+                                exception-handler
+                                (:consumer consumer-component)
+                                kafka-consumer-opts
+                                (partial make-default-consumer topics-or-regex)
+                                (atom nil)
+                                task-id)))
+
+(defrecord KafkaProducerFactory [kafka-producer-opts]
+  ProducerFactory
+  (build-producer [_]
+    (make-default-producer kafka-producer-opts)))
+
+(defrecord ProducerComponent [producer-factory]
   component/Lifecycle
   (start [c]
-    (assoc c :producer ((or make-kafka-producer make-default-producer) config)))
+    (assoc c :producer (build-producer producer-factory)))
   (stop [c]
     (when-let [p (:producer c)]
       (gregor/close p 2)) ;; 2 seconds to wait to send remaining messages, should this be configurable?

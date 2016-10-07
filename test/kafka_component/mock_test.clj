@@ -1,9 +1,10 @@
 (ns kafka-component.mock-test
   (:require [kafka-component.mock :refer :all]
             [clojure.test :refer :all]
-            [kafka-component.core-test :refer [with-resource]]
+            [kafka-component.core-test :refer [with-resource] :as core-test]
             [com.stuartsierra.component :as component]
-            [kafka-component.core :as core])
+            [kafka-component.core :as core]
+            [gregor.core :as gregor])
   (:import [org.apache.kafka.clients.producer Producer ProducerRecord RecordMetadata Callback]
            [org.apache.kafka.clients.consumer Consumer ConsumerRecord ConsumerRecords]
            [org.apache.kafka.common TopicPartition]
@@ -13,7 +14,55 @@
 
 (use-fixtures :each fixture-restart-broker!)
 
+(def mock-config {:kafka-producer-opts {}
+                  :kafka-consumer-opts default-mock-consumer-opts})
+
+(defn inject-mock-producer-consumer [system]
+  (-> system
+      (assoc :test-event-consumer-task-factory (map->MockConsumerTaskFactory {}))
+      (assoc :producer-factory (map->MockProducerFactory {:kafka-producer-opts {}}))))
+
+(defmacro with-test-system
+  [sys & body]
+  `(with-resource [system# (component/start (core-test/test-system (merge core-test/test-config
+                                                                          mock-config)
+                                                                   inject-mock-producer-consumer))]
+     component/stop
+     (let [~sys system#]
+       ~@body)))
+
+(deftest sending-and-receiving-messages-using-mock
+  (with-test-system {:keys [messages producer-component]}
+    @(gregor/send (:producer producer-component) "test_events" "key" "yolo")
+    (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
+           (deref messages 500 [])))))
+
 (def timeout 500)
+
+
+(defn mock-consumer-task-factory
+  ([kafka-consumer-opts consume-fn]
+   (map->MockConsumerTaskFactory {:logger println
+                                  :exception-handler println
+                                  :kafka-consumer-opts (merge default-mock-consumer-opts kafka-consumer-opts)
+                                  :consumer-component {:consumer consume-fn}}))
+  ([logger exception-handler kafka-consumer-opts consume-fn]
+   (map->MockConsumerTaskFactory {:logger logger
+                                  :exception-handler exception-handler
+                                  :kafka-consumer-opts (merge default-mock-consumer-opts kafka-consumer-opts)
+                                  :consumer-component {:consumer consume-fn}})))
+
+(defn mock-consumer-pool
+  ([pool-config consumer-task-factory]
+   (core/map->ConsumerPoolComponent {:logger println
+                                     :exception-handler println
+                                     :pool-config pool-config
+                                     :consumer-task-factory consumer-task-factory}))
+  ([logger exception-handler pool-config consumer-task-factory]
+   (core/map->ConsumerPoolComponent {:logger logger
+                                     :exception-handler exception-handler
+                                     :pool-config pool-config
+                                     :consumer-task-factory consumer-task-factory})))
 
 (defn producer-record
   ([] (producer-record "topic" "key" "value"))
@@ -184,24 +233,20 @@
       (when (>= (count updated-messages) expected-message-count)
         (deliver messages-promise @messages)))))
 
-(defn new-mock-pool [config expected-message-count received-messages]
-  (mock-consumer-pool (merge {:topics-or-regex []
-                              :pool-size 1
-                              :kafka-consumer-config {"auto.offset.reset" "earliest"
-                                                      "bootstrap.servers" "localhost:fake"
-                                                      "group.id" "test-group"}}
-                             config)
-                      {:consumer (partial consume-messages expected-message-count (atom []) received-messages)}
-                      logger logger))
+(defn new-mock-pool [pool-config kafka-consumer-opts expected-message-count received-messages]
+  (mock-consumer-pool pool-config
+                      (mock-consumer-task-factory kafka-consumer-opts
+                                                  (partial consume-messages expected-message-count (atom []) received-messages))))
 
 (deftest consumer-pool-can-be-started-to-consume-messages
   (let [received-messages (promise)]
     (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
-                                                                   :kafka-consumer-config {"auto.offset.reset" "earliest"
-                                                                                           "group.id" "test"
-                                                                                           "bootstrap.servers" "localhost:fake"}
                                                                    :pool-size 1}
-                                                                  2 received-messages))]
+                                                                  {"auto.offset.reset" "earliest"
+                                                                   "group.id" "test"
+                                                                   "bootstrap.servers" "localhost:fake"}
+                                                                  2
+                                                                  received-messages))]
       component/stop
       (let [producer (mock-producer {})]
         @(.send producer (producer-record "topic" "key" "value" 0))
@@ -214,6 +259,9 @@
   (let [received-messages (promise)]
     (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
                                                                    :pool-size 2}
+                                                                  {"auto.offset.reset" "earliest"
+                                                                   "group.id" "test"
+                                                                   "bootstrap.servers" "localhost:fake"}
                                                                   2 received-messages))]
       component/stop
       (let [producer (mock-producer {})]
@@ -226,12 +274,11 @@
 (deftest multiple-consumers-in-the-same-group-process-each-message-only-once
   (let [message-count (atom 0)]
     (with-resource [consumer-pool (component/start (mock-consumer-pool {:topics-or-regex ["topic"]
-                                                                        :pool-size 2
-                                                                        :kafka-consumer-config {"auto.offset.reset" "earliest"
-                                                                                                "bootstrap.servers" "localhost:fake"
-                                                                                                "group.id" "test-group"}}
-                                                                       {:consumer (fn [msg] (swap! message-count inc))}
-                                                                       logger logger))]
+                                                                        :pool-size 2}
+                                                                       (mock-consumer-task-factory {"auto.offset.reset" "earliest"
+                                                                                                    "bootstrap.servers" "localhost:fake"
+                                                                                                    "group.id" "test-group"}
+                                                                                                   (fn [msg] (swap! message-count inc)))))]
       component/stop
       (let [producer (mock-producer {})]
         @(.send producer (producer-record "topic" "key" "value" 0))
@@ -243,17 +290,17 @@
   (let [group-1-received-messages (promise)
         group-2-received-messages (promise)]
     (with-resource [consumer-pool (component/start (new-mock-pool {:topics-or-regex ["topic"]
-                                                                   :pool-size 2
-                                                                   :kafka-consumer-config {"auto.offset.reset" "earliest"
-                                                                                           "bootstrap.servers" "localhost:fake"
-                                                                                           "group.id" "group1"}}
+                                                                   :pool-size 2}
+                                                                  {"auto.offset.reset" "earliest"
+                                                                   "bootstrap.servers" "localhost:fake"
+                                                                   "group.id" "group1"}
                                                                   2 group-1-received-messages))]
       component/stop
       (with-resource [consumer-pool2 (component/start (new-mock-pool {:topics-or-regex ["topic"]
-                                                                      :pool-size 2
-                                                                      :kafka-consumer-config {"auto.offset.reset" "earliest"
-                                                                                              "bootstrap.servers" "localhost:fake"
-                                                                                              "group.id" "group2"}}
+                                                                      :pool-size 2}
+                                                                     {"auto.offset.reset" "earliest"
+                                                                      "bootstrap.servers" "localhost:fake"
+                                                                      "group.id" "group2"}
                                                                      2 group-2-received-messages))]
         component/stop
         (let [producer (mock-producer {})]
@@ -267,7 +314,8 @@
                  (sort-by :partition (deref group-2-received-messages 5000 [])))))))))
 
 (deftest producers-can-be-closed-by-gregor
-  (with-resource [producer-component (component/start (mock-producer-component {}))]
+  (with-resource [producer-component (component/start
+                                      (core/->ProducerComponent (->MockProducerFactory {})))]
     component/stop
     (is true "true to avoid cider's no assertion error")))
 
@@ -318,7 +366,10 @@
 
 (deftest consumers-fail-when-shutdown-grace-period-is-zero
   (try
-    (component/start (new-mock-pool {:shutdown-grace-period 0} 0 (promise)))
+    (component/start (new-mock-pool {:shutdown-grace-period 0}
+                                    {}
+                                    0
+                                    (promise)))
     (is false "expected exception to be raised")
     (catch Throwable e
       (is (.contains (.getMessage e) "\"shutdown-grace-period\" must not be zero")

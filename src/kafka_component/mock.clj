@@ -15,6 +15,12 @@
 
 ;; TODO: update README for new consumer config/constructors
 
+(def default-mock-consumer-opts
+  {"bootstrap.servers" "localhost:fake"
+   "auto.offset.reset" "earliest"
+   "group.id" "test"
+   "max.poll.records" "1000"})
+
 (def debug (atom false))
 
 ;; structure of broker-state:
@@ -415,13 +421,6 @@
                                    (config :kafka-consumer-config) (partial mock-consumer (config :topics-or-regex))
                                    (atom nil) task-id))
 
-(defn mock-consumer-pool
-  ([config]
-   (core/map->KafkaConsumerPool {:config config
-                                 :make-consumer-task mock-consumer-task}))
-  ([config consumer-component logger exception-handler]
-   (core/->KafkaConsumerPool config consumer-component logger exception-handler mock-consumer-task mock-consumer)))
-
 ;; TODO: assertions
 (defn assert-proper-config [config])
 (defn assert-proper-record [record])
@@ -471,9 +470,6 @@
     (assert msg-ch "Broker is not running! Did you mean to call 'start!' first?")
     (->MockProducer (atom nil) msg-ch (merge core/default-producer-config config))))
 
-(defn mock-producer-component [config]
-  (core/->KafkaProducerComponent config mock-producer))
-
 (defn record->clj [record]
   {:value     (.value record)
    :key       (.key record)
@@ -502,11 +498,26 @@
        ~@body
        (finally (shutdown!)))))
 
+
+
 (defmacro with-test-producer-consumer [producer-name consumer-name & body]
   `(with-test-broker
     (let [~producer-name (mock-producer {})
-          ~consumer-name (mock-consumer {"bootstrap.servers" "localhost:fake"
-                                         "auto.offset.reset" "earliest"
-                                         "group.id" "test"
-                                         "max.poll.records" "1000"})]
+          ~consumer-name (mock-consumer default-mock-consumer-opts)]
       ~@body)))
+
+(defrecord MockProducerFactory [kafka-producer-opts]
+  core/ProducerFactory
+  (build-producer [_]
+    (mock-producer kafka-producer-opts)))
+
+(defrecord MockConsumerTaskFactory [logger exception-handler kafka-consumer-opts consumer-component]
+  core/ConsumerTaskFactory
+  (build-task [_ topics-or-regex task-id]
+    (core/->ConsumerAlwaysCommitTask logger
+                                     exception-handler
+                                     (:consumer consumer-component)
+                                     kafka-consumer-opts
+                                     (partial mock-consumer topics-or-regex)
+                                     (atom nil)
+                                     task-id)))
