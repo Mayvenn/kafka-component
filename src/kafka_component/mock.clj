@@ -3,7 +3,8 @@
              :refer
              [<! <!! >! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
             [gregor.core :as gregor]
-            [kafka-component.core :as core])
+            [kafka-component.core :as core]
+            [kafka-component.config :as config])
   (:import java.lang.Integer
            java.util.Collection
            java.util.concurrent.TimeUnit
@@ -393,16 +394,12 @@
   (wakeup [_]
     (close! wakeup-ch)))
 
-(defn consumer-assertions [config]
-  (assert (:join-ch @broker-state) "Broker is not running! Did you mean to call 'start!' first?")
-  (assert (#{"latest" "earliest" "none"} (get config "auto.offset.reset")) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
-  (assert (get config "bootstrap.servers") "\"bootstrap.servers\" must be provided in config")
-  (assert (get config "group.id") "\"group.id\" must be provided in config"))
-
 (defn mock-consumer
   ([config] (mock-consumer [] config))
   ([auto-subscribe-topics config]
-   (consumer-assertions config)
+   (assert (:join-ch @broker-state) "Broker is not running! Did you mean to call 'start!' first?")
+   (config/assert-required-consumer-keys config)
+   (config/assert-non-nil-values config)
    (let [{:keys [join-ch leave-ch]} @broker-state
          mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}})
                                        (chan)
@@ -497,8 +494,6 @@
      (try
        ~@body
        (finally (shutdown!)))))
-
-
 
 (defmacro with-test-producer-consumer [producer-name consumer-name & body]
   `(with-test-broker
