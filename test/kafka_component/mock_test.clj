@@ -20,7 +20,7 @@
 (defn inject-mock-producer-consumer [system]
   (-> system
       (assoc :test-event-consumer-task-factory (map->MockConsumerTaskFactory {}))
-      (assoc :producer-factory (map->MockProducerFactory {:kafka-producer-opts {}}))))
+      (assoc :producer-component (map->MockProducerComponent {}))))
 
 (defmacro with-test-system
   [sys & body]
@@ -38,7 +38,6 @@
            (deref messages 500 [])))))
 
 (def timeout 500)
-
 
 (defn mock-consumer-task-factory
   ([kafka-consumer-opts consume-fn]
@@ -315,7 +314,7 @@
 
 (deftest producers-can-be-closed-by-gregor
   (with-resource [producer-component (component/start
-                                      (core/->ProducerComponent (->MockProducerFactory {})))]
+                                      (->MockProducerComponent {}))]
     component/stop
     (is true "true to avoid cider's no assertion error")))
 

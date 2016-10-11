@@ -23,12 +23,10 @@
                   :exception-handler println
                   :messages messages
                   :message-consumer {:consumer (juxt (partial deliver messages) (partial prn "Message consumed: "))}
-                  :producer-factory (map->KafkaProducerFactory {})
                   :producer-component (map->ProducerComponent {})
                   :test-event-consumer-task-factory (map->AlwaysCommitTaskFactory {})
                   :test-event-consumer-pool (map->ConsumerPoolComponent {:pool-config (:test-event-consumer-pool-config config)})))
-      {:producer-factory [:kafka-producer-opts]
-       :producer-component [:producer-factory]
+      {:producer-component [:kafka-producer-opts]
        :test-event-consumer-task-factory {:logger :logger
                                           :kafka-consumer-opts :kafka-consumer-opts
                                           :exception-handler :exception-handler
@@ -57,7 +55,7 @@
   (with-test-system {} {:keys [messages producer-component]}
     (.get (gregor/send (:producer producer-component) "test_events" "key" "yolo"))
     (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
-           (deref messages 10000 [])))))
+           (deref messages 2000 [])))))
 
 (deftest consumers-fail-when-auto-offset-reset-is-invalid
   (let [test-config (-> test-config
@@ -67,13 +65,13 @@
 
 (deftest consumers-fail-when-bootstrap-servers-is-missing
   (let [test-config (-> test-config
-                        (update :kafka-consumer-opts dissoc "bootstrap.servers" ))]
+                        (update :kafka-consumer-opts dissoc "bootstrap.servers"))]
     (is (thrown? Exception
                  (with-test-system test-config {:keys [messages producer-component]})))))
 
 (deftest consumers-fail-when-group-id-is-missing
   (let [test-config (-> test-config
-                        (update :kafka-consumer-opts dissoc "group.id" ))]
+                        (update :kafka-consumer-opts dissoc "group.id"))]
     (is (thrown? Exception
                  (with-test-system test-config {:keys [messages producer-component]})))))
 

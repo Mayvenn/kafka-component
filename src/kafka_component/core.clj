@@ -5,9 +5,6 @@
   (:import [java.util.concurrent Executors TimeUnit]
            org.apache.kafka.common.errors.WakeupException))
 
-(defprotocol ProducerFactory
-  (build-producer [this]))
-
 (defprotocol ConsumerTaskFactory
   (build-task [this topics-or-regex task-id]))
 
@@ -28,10 +25,10 @@
   (gregor/producer (config "bootstrap.servers")
                    (merge default-producer-config config)))
 
-(defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-consumer consumer-atom task-id]
+(defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-kafka-consumer consumer-atom task-id]
   java.lang.Runnable
   (run [_]
-    (let [kafka-consumer (make-consumer kafka-config)
+    (let [kafka-consumer (make-kafka-consumer kafka-config)
           group-id       (kafka-config "group.id")
           log-exception  (fn log-exception [e & msg]
                            (logger :error (apply str "group=" group-id " task-id=" task-id " " msg))
@@ -113,20 +110,15 @@
     (->ConsumerAlwaysCommitTask logger
                                 exception-handler
                                 (:consumer consumer-component)
-                                (partial make-default-consumer kafka-consumer-opts)
-                                topics-or-regex
+                                kafka-consumer-opts
+                                (partial make-default-consumer topics-or-regex)
                                 (atom nil)
                                 task-id)))
 
-(defrecord KafkaProducerFactory [kafka-producer-opts]
-  ProducerFactory
-  (build-producer [_]
-    (make-default-producer kafka-producer-opts)))
-
-(defrecord ProducerComponent [producer-factory]
+(defrecord ProducerComponent [kafka-producer-opts]
   component/Lifecycle
   (start [c]
-    (assoc c :producer (build-producer producer-factory)))
+    (assoc c :producer (make-default-producer kafka-producer-opts)))
   (stop [c]
     (when-let [p (:producer c)]
       (gregor/close p 2)) ;; 2 seconds to wait to send remaining messages, should this be configurable?

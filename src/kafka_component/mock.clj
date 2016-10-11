@@ -3,6 +3,7 @@
              :refer
              [<! <!! >! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
             [gregor.core :as gregor]
+            [com.stuartsierra.component :as component]
             [kafka-component.core :as core]
             [kafka-component.config :as config])
   (:import java.lang.Integer
@@ -124,12 +125,12 @@
 
 (defn broker-receive-messages [state msg-ch]
   (goe-loop []
-    (alt!
-      msg-ch ([[res-ch msg]]
-              (when res-ch
-                (>! res-ch (broker-save-record! state msg))
-                (close! res-ch)
-                (recur))))))
+            (alt!
+              msg-ch ([[res-ch msg]]
+                      (when res-ch
+                        (>! res-ch (broker-save-record! state msg))
+                        (close! res-ch)
+                        (recur))))))
 
 (defprotocol IRebalance
   (all-topics [this])
@@ -164,14 +165,14 @@
   (doseq [c consumers]
     (>!! (:rebalance-control-ch c) [participants-ch complete-ch]))
   (goe-loop [participants []]
-    (alt!
-      participants-ch ([participant]
-                       (when participant ; else, closed
-                         (let [participants' (conj participants participant)]
-                           (if (>= (count participants') (count consumers))
-                             (assign-partitions broker-state consumers participants' participants-ch complete-ch)
-                             (recur participants')))))
-      (timeout rebalance-participants-timeout) (assign-partitions broker-state consumers participants participants-ch complete-ch))))
+            (alt!
+              participants-ch ([participant]
+                               (when participant ; else, closed
+                                 (let [participants' (conj participants participant)]
+                                   (if (>= (count participants') (count consumers))
+                                     (assign-partitions broker-state consumers participants' participants-ch complete-ch)
+                                     (recur participants')))))
+              (timeout rebalance-participants-timeout) (assign-partitions broker-state consumers participants participants-ch complete-ch))))
 
 (defn rebalance-consumers [relevant-consumers broker-state]
   (let [rebalance-participants-ch (chan buffer-size)
@@ -183,21 +184,21 @@
 
 (defn consumer-coordinator [state broker-state join-ch leave-ch]
   (goe-loop []
-    (alt!
-      join-ch ([[consumer topics]]
-               (when consumer ; else, closed
-                 (let [group-id         (get-in consumer [:config "group.id"] "")
-                       group->consumers (swap! state update group-id (fnil conj #{}) consumer)]
-                   (apply-pending-topics consumer topics)
-                   (rebalance-consumers (get group->consumers group-id) broker-state)
-                   (recur))))
-      leave-ch ([consumer]
-                (when consumer ; else, closed
-                  (let [group-id         (get-in consumer [:config "group.id"] "")
-                        group->consumers (swap! state update group-id disj consumer)]
-                    (clean-up-subscriptions consumer)
-                    (rebalance-consumers (get group->consumers group-id) broker-state)
-                    (recur)))))))
+            (alt!
+              join-ch ([[consumer topics]]
+                       (when consumer ; else, closed
+                         (let [group-id         (get-in consumer [:config "group.id"] "")
+                               group->consumers (swap! state update group-id (fnil conj #{}) consumer)]
+                           (apply-pending-topics consumer topics)
+                           (rebalance-consumers (get group->consumers group-id) broker-state)
+                           (recur))))
+              leave-ch ([consumer]
+                        (when consumer ; else, closed
+                          (let [group-id         (get-in consumer [:config "group.id"] "")
+                                group->consumers (swap! state update group-id disj consumer)]
+                            (clean-up-subscriptions consumer)
+                            (rebalance-consumers (get group->consumers group-id) broker-state)
+                            (recur)))))))
 
 (defn start! []
   (let [msg-ch (chan buffer-size)
@@ -376,17 +377,17 @@
   (seekToBeginning [_ partitions] (throw (UnsupportedOperationException.)))
   (seekToEnd [_ partitions] (throw (UnsupportedOperationException.)))
   (^void subscribe [^Consumer this ^Collection topics]
-   (logger (format "-- [consumer %s] subscribe to topics: %s"
-                   (get config "group.id")
-                   (pr-str (seq topics))))
-   (assert-proper-consumer-config config)
+    (logger (format "-- [consumer %s] subscribe to topics: %s"
+                    (get config "group.id")
+                    (pr-str (seq topics))))
+    (assert-proper-consumer-config config)
    ;; TODO: what if already subscribed, what does Kafka do?
-   (swap! broker-state #(reduce (fn [state topic] (broker-ensure-topic state topic)) % topics))
-   (>!! join-ch [this topics]))
+    (swap! broker-state #(reduce (fn [state topic] (broker-ensure-topic state topic)) % topics))
+    (>!! join-ch [this topics]))
   (^void subscribe [^Consumer this ^Collection topics ^ConsumerRebalanceListener listener]
-   (throw (UnsupportedOperationException.)))
+    (throw (UnsupportedOperationException.)))
   (^void subscribe [^Consumer this ^Pattern pattern ^ConsumerRebalanceListener listener]
-   (throw (UnsupportedOperationException.)))
+    (throw (UnsupportedOperationException.)))
   (unsubscribe [this]
     (alt!!
       [[leave-ch this]] :wrote
@@ -445,10 +446,10 @@
     (let [res-ch (chan 1)
           rtn-promise (promise)]
       (goe
-        (>! msg-ch [res-ch producer-record])
-        (let [committed-record-metadata (<! res-ch)]
-          (.onCompletion cb committed-record-metadata nil)
-          (deliver rtn-promise committed-record-metadata)))
+       (>! msg-ch [res-ch producer-record])
+       (let [committed-record-metadata (<! res-ch)]
+         (.onCompletion cb committed-record-metadata nil)
+         (deliver rtn-promise committed-record-metadata)))
       (future @rtn-promise))))
 
 ;; Gregor adds a method to the kafka producer, so our producer needs the
@@ -497,14 +498,18 @@
 
 (defmacro with-test-producer-consumer [producer-name consumer-name & body]
   `(with-test-broker
-    (let [~producer-name (mock-producer {})
-          ~consumer-name (mock-consumer default-mock-consumer-opts)]
-      ~@body)))
+     (let [~producer-name (mock-producer {})
+           ~consumer-name (mock-consumer default-mock-consumer-opts)]
+       ~@body)))
 
-(defrecord MockProducerFactory [kafka-producer-opts]
-  core/ProducerFactory
-  (build-producer [_]
-    (mock-producer kafka-producer-opts)))
+(defrecord MockProducerComponent [kafka-producer-opts]
+  component/Lifecycle
+  (start [c]
+    (assoc c :producer (mock-producer kafka-producer-opts)))
+  (stop [c]
+    (when-let [p (:producer c)]
+      (gregor/close p 2)) ;; 2 seconds to wait to send remaining messages, should this be configurable?
+    (dissoc c :producer)))
 
 (defrecord MockConsumerTaskFactory [logger exception-handler kafka-consumer-opts consumer-component]
   core/ConsumerTaskFactory
