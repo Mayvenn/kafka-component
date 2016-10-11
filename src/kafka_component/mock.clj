@@ -248,11 +248,6 @@
         "latest"   (count (get-in broker-state [topic partition :messages]))
         "none"     (throw (InvalidOffsetException. (str "auto.offset.reset=none, no existing offset for group " group-id " topic " topic " partition " partition)))))))
 
-(defn assert-proper-consumer-config [config]
-  (let [auto-offset (config "auto.offset.reset")]
-    (when-not (#{"earliest" "latest" "none"} auto-offset)
-      (throw (InvalidOffsetException. (str "auto.offset.reset=" auto-offset ", invalid configuration"))))))
-
 (defn ^:private desires-repoll [state subscribed-topic-partitions]
   (let [poll-chan (chan buffer-size)]
     (doseq [[topic-partition _] subscribed-topic-partitions]
@@ -380,8 +375,7 @@
     (logger (format "-- [consumer %s] subscribe to topics: %s"
                     (get config "group.id")
                     (pr-str (seq topics))))
-    (assert-proper-consumer-config config)
-   ;; TODO: what if already subscribed, what does Kafka do?
+    ;; TODO: what if already subscribed, what does Kafka do?
     (swap! broker-state #(reduce (fn [state topic] (broker-ensure-topic state topic)) % topics))
     (>!! join-ch [this topics]))
   (^void subscribe [^Consumer this ^Collection topics ^ConsumerRebalanceListener listener]
@@ -399,8 +393,7 @@
   ([config] (mock-consumer [] config))
   ([auto-subscribe-topics config]
    (assert (:join-ch @broker-state) "Broker is not running! Did you mean to call 'start!' first?")
-   (config/assert-required-consumer-keys config)
-   (config/assert-non-nil-values config)
+   (config/assert-consumer-opts config)
    (let [{:keys [join-ch leave-ch]} @broker-state
          mock-consumer (->MockConsumer (atom {:subscribed-topic-partitions {}})
                                        (chan)
@@ -420,9 +413,10 @@
                                    (atom nil) task-id))
 
 ;; TODO: assertions
-(defn assert-proper-config [config])
 (defn assert-proper-record [record])
-(defn assert-producer-not-closed [producer-state])
+(defn assert-producer-not-closed
+  "Checks conn-open? in producer state"
+  [producer-state])
 
 (def noop-cb
   (reify
@@ -439,7 +433,6 @@
   (send [this record]
     (.send this record noop-cb))
   (send [_ producer-record cb]
-    (assert-proper-config config)
     (assert-proper-record producer-record)
     (assert-producer-not-closed producer-state)
     (logger "--MockProducer send" (pr-str producer-record))
@@ -470,6 +463,7 @@
 (defn mock-producer [config]
   (let [msg-ch (:msg-ch @broker-state)]
     (assert msg-ch "Broker is not running! Did you mean to call 'start!' first?")
+    (config/assert-producer-opts config)
     (->MockProducer (atom nil) msg-ch (merge config/default-producer-config config))))
 
 (defn record->clj [record]
@@ -518,6 +512,7 @@
 (defrecord MockConsumerTaskFactory [logger exception-handler kafka-consumer-opts consumer-component]
   core/ConsumerTaskFactory
   (build-task [_ topics-or-regex task-id]
+    (config/assert-consumer-opts kafka-consumer-opts)
     (core/->ConsumerAlwaysCommitTask logger
                                      exception-handler
                                      (:consumer consumer-component)

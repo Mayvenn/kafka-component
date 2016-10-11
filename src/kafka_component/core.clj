@@ -9,10 +9,12 @@
   (build-task [this topics-or-regex task-id]))
 
 (defn make-default-consumer [topics-or-regex kafka-config]
+  (config/assert-consumer-opts kafka-config)
   (gregor/consumer (kafka-config "bootstrap.servers") (kafka-config "group.id")
                    topics-or-regex (merge config/default-consumer-config kafka-config)))
 
 (defn make-default-producer [config]
+  (config/assert-producer-opts config)
   (gregor/producer (config "bootstrap.servers")
                    (merge config/default-producer-config config)))
 
@@ -98,9 +100,7 @@
 (defrecord AlwaysCommitTaskFactory [logger exception-handler consumer-component kafka-consumer-opts]
   ConsumerTaskFactory
   (build-task [_ topics-or-regex task-id]
-    (assert kafka-consumer-opts "Kafka-consumer-opts cannot be nil")
-    (config/assert-required-consumer-keys kafka-consumer-opts)
-    (config/assert-non-nil-values kafka-consumer-opts)
+    (config/assert-consumer-opts kafka-consumer-opts)
     (->ConsumerAlwaysCommitTask logger
                                 exception-handler
                                 (:consumer consumer-component)

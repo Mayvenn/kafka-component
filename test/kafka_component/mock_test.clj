@@ -343,7 +343,7 @@
     (mock-consumer {"auto.offset.reset" "a-cat"})
     (is false "expected exception to be raised")
     (catch Throwable e
-      (is (.contains (.getMessage e) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
+      (is (.contains (.getMessage e) "\"auto.offset.reset\" should be set to one of #{\"latest\" \"earliest\" \"none\"}")
           (str "Got: " (.getMessage e))))))
 
 (deftest consumers-fail-when-bootstrap-servers-is-missing
@@ -351,7 +351,7 @@
     (mock-consumer {"auto.offset.reset" "none"})
     (is false "expected exception to be raised")
     (catch Throwable e
-      (is (.contains (.getMessage e) "\"bootstrap.servers\" must be provided in config")
+      (is (.contains (.getMessage e) "\"bootstrap.servers\" must be provided in the config")
           (str "Got: " (.getMessage e))))))
 
 (deftest consumers-fail-when-group-id-is-missing
@@ -360,7 +360,7 @@
                     "bootstrap.servers" "localhost:fake"})
     (is false "expected exception to be raised")
     (catch Throwable e
-      (is (.contains (.getMessage e) "\"group.id\" must be provided in config")
+      (is (.contains (.getMessage e) "\"group.id\" must be provided in the config")
           (str "Got: " (.getMessage e))))))
 
 (deftest consumers-fail-when-shutdown-grace-period-is-zero
