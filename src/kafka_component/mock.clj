@@ -452,11 +452,15 @@
          (deliver rtn-promise committed-record-metadata)))
       (future @rtn-promise))))
 
-;; Gregor adds a method to the kafka producer, so our producer needs the
-;; method as well
+;; Gregor adds a method to the kafka producers and consumers, so our mocks need
+;; the method as well
 (extend-protocol gregor/Closeable
+  MockConsumer
+  (close
+    ([c] (.close c)))
   MockProducer
-  (close ([p] (.close p))
+  (close
+    ([p] (.close p))
     ([p timeout]
      ;; Tries to close the producer cleanly within the specified timeout.
      ;; If the close does not complete within the timeout, fail any pending send
