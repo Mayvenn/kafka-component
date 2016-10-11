@@ -8,22 +8,13 @@
 (defprotocol ConsumerTaskFactory
   (build-task [this topics-or-regex task-id]))
 
-(def default-consumer-config
-  {"enable.auto.commit"	"false"
-   "max.poll.records" "1"})
-
 (defn make-default-consumer [topics-or-regex kafka-config]
   (gregor/consumer (kafka-config "bootstrap.servers") (kafka-config "group.id")
-                   topics-or-regex (merge default-consumer-config kafka-config)))
-
-(def default-producer-config
-  {"acks" "all"
-   "retries" "3"
-   "max.in.flight.requests.per.connection" "1"})
+                   topics-or-regex (merge config/default-consumer-config kafka-config)))
 
 (defn make-default-producer [config]
   (gregor/producer (config "bootstrap.servers")
-                   (merge default-producer-config config)))
+                   (merge config/default-producer-config config)))
 
 (defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-kafka-consumer consumer-atom task-id]
   java.lang.Runnable

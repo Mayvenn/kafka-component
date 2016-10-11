@@ -408,7 +408,7 @@
                                        join-ch
                                        leave-ch
                                        logger
-                                       (merge core/default-consumer-config
+                                       (merge config/default-consumer-config
                                               config))]
      (when (seq auto-subscribe-topics)
        (.subscribe mock-consumer auto-subscribe-topics))
@@ -466,7 +466,7 @@
 (defn mock-producer [config]
   (let [msg-ch (:msg-ch @broker-state)]
     (assert msg-ch "Broker is not running! Did you mean to call 'start!' first?")
-    (->MockProducer (atom nil) msg-ch (merge core/default-producer-config config))))
+    (->MockProducer (atom nil) msg-ch (merge config/default-producer-config config))))
 
 (defn record->clj [record]
   {:value     (.value record)
