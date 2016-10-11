@@ -14,7 +14,11 @@
     (assert v (format "%s cannot be nil" k))))
 
 (defn assert-required-consumer-keys [config]
-  (assert (#{"latest" "earliest" "none"} (get config "auto.offset.reset")) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
-  (assert (get config "bootstrap.servers") "\"bootstrap.servers\" must be provided in config")
-  (assert (get config "group.id") "\"group.id\" must be provided in config"))
+  (try
+    (assert (#{"latest" "earliest" "none"} (get config "auto.offset.reset")) "\"auto.offset.reset\" should be one of #{\"latest\" \"earliest\" \"none\"}")
+    (assert (get config "bootstrap.servers") "\"bootstrap.servers\" must be provided in config")
+    (assert (get config "group.id") "\"group.id\" must be provided in config")
+    (catch Exception e
+      (prn e)
+      (throw e))))
 

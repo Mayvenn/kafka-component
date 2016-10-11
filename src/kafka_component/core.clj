@@ -28,10 +28,10 @@
   (gregor/producer (config "bootstrap.servers")
                    (merge default-producer-config config)))
 
-(defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config topics-or-regex consumer-atom task-id]
+(defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-consumer consumer-atom task-id]
   java.lang.Runnable
   (run [_]
-    (let [kafka-consumer (make-default-consumer topics-or-regex kafka-config)
+    (let [kafka-consumer (make-consumer kafka-config)
           group-id       (kafka-config "group.id")
           log-exception  (fn log-exception [e & msg]
                            (logger :error (apply str "group=" group-id " task-id=" task-id " " msg))
@@ -46,10 +46,8 @@
 
         (while true
           (do
-            (log "action=looping topic=" topics-or-regex)
             (doseq [{:keys [topic partition offset key] :as record} (gregor/poll kafka-consumer)]
               (log "action=receiving topic=" topic " partition=" partition " key=" key)
-              (prn record)
               (try
                 (message-consumer record)
                 (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
@@ -70,7 +68,7 @@
       (gregor/wakeup consumer))))
 
 (defn init-and-start-task-pool [{:keys [pool-config pool-id consumer-task-factory] :as task-pool}]
-  (let [pool-size   1#_(:pool-size pool-config)
+  (let [pool-size   (:pool-size pool-config)
         thread-pool (Executors/newFixedThreadPool pool-size)
         task-ids    (map (partial str pool-id "-") (range pool-size))
         tasks       (map (partial build-task consumer-task-factory (:topics-or-regex pool-config)) task-ids)]
@@ -109,14 +107,13 @@
 (defrecord AlwaysCommitTaskFactory [logger exception-handler consumer-component kafka-consumer-opts]
   ConsumerTaskFactory
   (build-task [_ topics-or-regex task-id]
-    (clojure.pprint/pprint kafka-consumer-opts)
     (assert kafka-consumer-opts "Kafka-consumer-opts cannot be nil")
     (config/assert-required-consumer-keys kafka-consumer-opts)
     (config/assert-non-nil-values kafka-consumer-opts)
     (->ConsumerAlwaysCommitTask logger
                                 exception-handler
                                 (:consumer consumer-component)
-                                kafka-consumer-opts
+                                (partial make-default-consumer kafka-consumer-opts)
                                 topics-or-regex
                                 (atom nil)
                                 task-id)))
