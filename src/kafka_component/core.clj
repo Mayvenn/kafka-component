@@ -28,21 +28,21 @@
 (defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-kafka-consumer consumer-atom task-id]
   java.lang.Runnable
   (run [_]
-    (let [kafka-consumer (make-kafka-consumer kafka-config)
-          group-id       (kafka-config "group.id")
-          log-exception  (fn log-exception [e & msg]
-                           (logger :error (apply str "group=" group-id " task-id=" task-id " " msg))
-                           (logger :error e)
-                           (exception-handler e))
-          log            (fn log [& msg]
-                           (logger :info (apply str "group=" group-id " task-id=" task-id " " msg)))]
+    (try
+      (let [kafka-consumer (make-kafka-consumer kafka-config)
+            group-id       (kafka-config "group.id")
+            log-exception  (fn log-exception [e & msg]
+                             (logger :error (apply str "group=" group-id " task-id=" task-id " " msg))
+                             (logger :error e)
+                             (exception-handler e))
+            log            (fn log [& msg]
+                             (logger :info (apply str "group=" group-id " task-id=" task-id " " msg)))]
 
-      (reset! consumer-atom kafka-consumer)
-      (try
-        (log "action=starting")
+        (reset! consumer-atom kafka-consumer)
+        (try
+          (log "action=starting")
 
-        (while true
-          (do
+          (while true
             (doseq [{:keys [topic partition offset key] :as record} (gregor/poll kafka-consumer)]
               (log "action=receiving topic=" topic " partition=" partition " key=" key)
               (try
@@ -50,15 +50,18 @@
                 (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
                 (catch WakeupException e (throw e))
                 (catch Exception e
-                  (log-exception e "msg=error in message consumer"))))))
+                  (log-exception e "msg=error in message consumer")))))
 
-        (log "action=exiting")
-        (catch WakeupException e (log "action=woken-up"))
-        (catch Exception e (log-exception e "msg=error in kafka consumer task runnable"))
-        (finally
-          (log "action=closing-kafka-consumer")
-          (gregor/close kafka-consumer)))))
-
+          (log "action=exiting")
+          (catch WakeupException e (log "action=woken-up"))
+          (catch Exception e (log-exception e "msg=error in kafka consumer task runnable"))
+          (finally
+            (log "action=closing-kafka-consumer")
+            (gregor/close kafka-consumer))))
+      (catch Exception e
+        (logger :error e)
+        (exception-handler e)
+        (throw e))))
   java.io.Closeable
   (close [_]
     (when-let [consumer @consumer-atom]
