@@ -407,11 +407,6 @@
        (.subscribe mock-consumer auto-subscribe-topics))
      mock-consumer)))
 
-(defn mock-consumer-task [{:keys [config logger exception-handler consumer-component]} task-id]
-  (core/->ConsumerAlwaysCommitTask logger exception-handler (:consumer consumer-component)
-                                   (config :kafka-consumer-config) (partial mock-consumer (config :topics-or-regex))
-                                   (atom nil) task-id))
-
 ;; TODO: assertions
 (defn assert-proper-record [record])
 (defn assert-producer-not-closed
