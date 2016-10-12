@@ -40,7 +40,7 @@
 (def default-num-partitions 2)
 (def consumer-backoff 20)
 (def rebalance-participants-timeout 2000)
-(def consumer-rebalance-timeout 2000)
+(def consumer-rebalance-timeout 4000)
 (def consumer-unsubscribe-timeout 5000)
 
 (defn logger [& args]
@@ -385,7 +385,7 @@
   (unsubscribe [this]
     (alt!!
       [[leave-ch this]] :wrote
-      (timeout consumer-unsubscribe-timeout) (throw (Exception. "dead waiting to unsubscribe"))))
+      (timeout consumer-unsubscribe-timeout) ([_] (logger "dead waiting to unsubscribe") nil)))
   (wakeup [_]
     (close! wakeup-ch)))
 
