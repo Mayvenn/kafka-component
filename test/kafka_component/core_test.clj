@@ -6,7 +6,6 @@
             [gregor.core :as gregor]))
 
 (def test-config {:kafka-reader-config {:concurrency-level         1
-                                        :shutdown-timeout          4
                                         :topics                    ["test_events"]
                                         :native-consumer-overrides ek/kafka-config}
                   :kafka-writer-config {:native-producer-overrides ek/kafka-config}})

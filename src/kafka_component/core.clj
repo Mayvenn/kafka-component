@@ -92,7 +92,7 @@
                 :log-action log-action}))))
   (stop [{:keys [pool log-action] :as this}]
     (log-action "stopping-consumption")
-    (stop-task-pool pool shutdown-timeout)
+    (stop-task-pool pool (or shutdown-timeout 4))
     (log-action "stopped-consumption")
     (dissoc this :pool)))
 
