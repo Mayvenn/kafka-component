@@ -24,8 +24,8 @@
             "\"auto.offset.reset\" should be set to one of #{\"latest\" \"earliest\" \"none\"}")
     (assert-contains-keys opts "bootstrap.servers" "group.id")
     (assert-non-nil-values opts)
-    (catch Exception e
-        (throw e))))
+    (catch Throwable e
+      (throw (Exception. e)))))
 
 (defn assert-producer-opts [opts]
   (try

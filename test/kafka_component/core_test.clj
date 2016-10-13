@@ -5,10 +5,11 @@
             [clojure.test :refer :all]
             [gregor.core :as gregor]))
 
-(def test-config {:kafka-consumer-opts ek/kafka-config
-                  :kafka-producer-opts ek/kafka-config
-                  :test-event-consumer-pool-config {:pool-size 1
-                                                    :topics-or-regex ["test_events"]}})
+(def test-config {:kafka-reader-config {:concurrency-level         1
+                                        :shutdown-timeout          4
+                                        :topics                    ["test_events"]
+                                        :native-consumer-overrides ek/kafka-config}
+                  :kafka-writer-config {:native-producer-overrides ek/kafka-config}})
 
 (defn test-system
   ([config]
@@ -17,23 +18,15 @@
    (let [messages (promise)]
      (component/system-using
       (transform (component/system-map
-                  :kafka-producer-opts (:kafka-producer-opts config)
-                  :kafka-consumer-opts (:kafka-consumer-opts config)
                   :logger println
                   :exception-handler println
                   :messages messages
-                  :message-consumer {:consumer (juxt (partial deliver messages) (partial prn "Message consumed: "))}
-                  :producer-component (map->ProducerComponent {})
-                  :test-event-consumer-task-factory (map->AlwaysCommitTaskFactory {})
-                  :test-event-consumer-pool (map->ConsumerPoolComponent {:pool-config (:test-event-consumer-pool-config config)})))
-      {:producer-component [:kafka-producer-opts]
-       :test-event-consumer-task-factory {:logger :logger
-                                          :kafka-consumer-opts :kafka-consumer-opts
-                                          :exception-handler :exception-handler
-                                          :consumer-component :message-consumer}
-       :test-event-consumer-pool {:logger :logger
-                                  :exception-handler :exception-handler
-                                  :consumer-task-factory :test-event-consumer-task-factory}}))))
+                  :test-event-record-processor {:process (juxt (partial deliver messages) (partial prn "Message consumed: "))}
+                  :test-event-reader (map->KafkaReader (:kafka-reader-config config))
+                  :writer (map->KafkaWriter (:kafka-writer-config config))))
+      {:test-event-reader {:logger            :logger
+                           :exception-handler :exception-handler
+                           :record-processor  :test-event-record-processor}}))))
 
 (defmacro with-resource
   [bindings close-fn & body]
@@ -45,37 +38,41 @@
 
 (defmacro with-test-system
   [config sys & body]
-  `(ek/with-test-broker producer# consumer#
-     (with-resource [system# (component/start (test-system (merge test-config ~config)))]
-       component/stop
-       (let [~sys system#]
-         ~@body))))
+  `(with-resource [system# (component/start (test-system ~config))]
+    component/stop
+    (let [~sys system#]
+      ~@body)))
+
+(defmacro with-transformed-test-system
+  [config transform sys & body]
+  `(with-resource [system# (component/start (test-system ~config ~transform))]
+    component/stop
+    (let [~sys system#]
+      ~@body)))
 
 (deftest sending-and-receiving-messages-using-kafka
-  (with-test-system {} {:keys [messages producer-component]}
-    (.get (gregor/send (:producer producer-component) "test_events" "key" "yolo"))
-    (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
-           (deref messages 2000 [])))))
+  (ek/with-test-broker producer consumer
+    (with-test-system test-config {:keys [messages writer]}
+      (write writer "test_events" "key" "yolo")
+      (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
+             (deref messages 2000 []))))))
 
 (deftest consumers-fail-when-auto-offset-reset-is-invalid
-  (let [test-config (-> test-config
-                        (assoc-in [:kafka-consumer-opts "auto.offset.reset"] "smallest"))]
+  (let [test-config (assoc-in test-config [:kafka-reader-config :native-consumer-overrides "auto.offset.reset"] "smallest")]
     (is (thrown? Exception
-                 (with-test-system test-config {:keys [messages producer-component]})))))
+                 (with-test-system test-config sys)))))
 
 (deftest consumers-fail-when-bootstrap-servers-is-missing
-  (let [test-config (-> test-config
-                        (update :kafka-consumer-opts dissoc "bootstrap.servers"))]
+  (let [test-config (update-in test-config [:kafka-reader-config :native-consumer-overrides] dissoc "bootstrap.servers")]
     (is (thrown? Exception
-                 (with-test-system test-config {:keys [messages producer-component]})))))
+                 (with-test-system test-config sys)))))
 
 (deftest consumers-fail-when-group-id-is-missing
-  (let [test-config (-> test-config
-                        (update :kafka-consumer-opts dissoc "group.id"))]
+  (let [test-config (update-in test-config [:kafka-reader-config :native-consumer-overrides] dissoc "group.id")]
     (is (thrown? Exception
-                 (with-test-system test-config {:keys [messages producer-component]})))))
+                 (with-test-system test-config sys)))))
 
 (deftest consumers-fail-when-shutdown-grace-period-is-zero
-  (let [test-config (assoc-in test-config [:test-event-consumer-pool-config :shutdown-grace-period] 0)]
+  (let [test-config (assoc-in test-config [:kafka-reader-config :shutdown-timeout] 0)]
     (is (thrown? Exception
-                 (with-test-system test-config {:keys [messages producer-component]})))))
+                 (with-test-system test-config sys)))))

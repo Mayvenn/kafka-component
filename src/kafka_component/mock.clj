@@ -18,8 +18,7 @@
 ;; TODO: update README for new consumer config/constructors
 
 (def default-mock-consumer-opts
-  {"bootstrap.servers" "localhost:fake"
-   "auto.offset.reset" "earliest"
+  {"auto.offset.reset" "earliest"
    "group.id" "test"
    "max.poll.records" "1000"})
 
@@ -492,26 +491,11 @@
 (defmacro with-test-producer-consumer [producer-name consumer-name & body]
   `(with-test-broker
      (let [~producer-name (mock-producer {})
-           ~consumer-name (mock-consumer default-mock-consumer-opts)]
+           ~consumer-name (mock-consumer (merge default-mock-consumer-opts {"bootstrap.servers" "localhost.fake"}))]
        ~@body)))
 
-(defrecord MockProducerComponent [kafka-producer-opts]
-  component/Lifecycle
-  (start [c]
-    (assoc c :producer (mock-producer kafka-producer-opts)))
-  (stop [c]
-    (when-let [p (:producer c)]
-      (gregor/close p 2)) ;; 2 seconds to wait to send remaining messages, should this be configurable?
-    (dissoc c :producer)))
+(defmethod core/make-consumer :mock [_ topics overrides]
+  (mock-consumer topics overrides))
 
-(defrecord MockConsumerTaskFactory [logger exception-handler kafka-consumer-opts consumer-component]
-  core/ConsumerTaskFactory
-  (build-task [_ topics-or-regex task-id]
-    (config/assert-consumer-opts kafka-consumer-opts)
-    (core/->ConsumerAlwaysCommitTask logger
-                                     exception-handler
-                                     (:consumer consumer-component)
-                                     kafka-consumer-opts
-                                     (partial mock-consumer topics-or-regex)
-                                     (atom nil)
-                                     task-id)))
+(defmethod core/make-producer :mock [_ overrides]
+  (mock-producer overrides))

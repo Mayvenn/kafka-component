@@ -5,33 +5,36 @@
   (:import [java.util.concurrent Executors TimeUnit]
            org.apache.kafka.common.errors.WakeupException))
 
-(defprotocol ConsumerTaskFactory
-  (build-task [this topics-or-regex task-id]))
+(defmulti make-consumer
+  (fn [type topics overrides]
+    (config/assert-consumer-opts overrides)
+    type))
 
-(defn make-default-consumer [topics-or-regex kafka-config]
-  (config/assert-consumer-opts kafka-config)
-  (gregor/consumer (kafka-config "bootstrap.servers") (kafka-config "group.id")
-                   topics-or-regex (merge config/default-consumer-config kafka-config)))
+(defmulti make-producer
+  (fn [type overrides]
+    (config/assert-producer-opts overrides)
+    type))
 
-(defn make-default-producer [config]
-  (config/assert-producer-opts config)
-  (gregor/producer (config "bootstrap.servers")
-                   (merge config/default-producer-config config)))
+(defmethod make-consumer :default [_ topics overrides]
+  (gregor/consumer (overrides "bootstrap.servers")
+                   (overrides "group.id")
+                   topics
+                   (merge config/default-consumer-config overrides)))
 
-(defrecord ConsumerAlwaysCommitTask [logger exception-handler message-consumer kafka-config make-kafka-consumer consumer-atom task-id]
-  java.lang.Runnable
-  (run [_]
-    (try
-      (let [kafka-consumer (make-kafka-consumer kafka-config)
-            group-id       (kafka-config "group.id")
-            log-exception  (fn log-exception [e & msg]
-                             (logger :error (apply str "group=" group-id " task-id=" task-id " " msg))
-                             (logger :error e)
-                             (exception-handler e))
-            log            (fn log [& msg]
-                             (logger :info (apply str "group=" group-id " task-id=" task-id " " msg)))]
+(defmethod make-producer :default [_ overrides]
+  (gregor/producer (overrides "bootstrap.servers")
+                   (merge config/default-producer-config overrides)))
 
-        (reset! consumer-atom kafka-consumer)
+(defn make-task [logger exception-handler process-record kafka-consumer task-id]
+  (letfn [(log-exception [e & msg]
+            (logger :error (apply str "task-id=" task-id " " msg))
+            (logger :error e)
+            (exception-handler e))
+          (log [& msg]
+            (logger :info (apply str "task-id=" task-id " " msg)))]
+    (reify
+      java.lang.Runnable
+      (run [_]
         (try
           (log "action=starting")
 
@@ -39,7 +42,7 @@
             (doseq [{:keys [topic partition offset key] :as record} (gregor/poll kafka-consumer)]
               (log "action=receiving topic=" topic " partition=" partition " key=" key)
               (try
-                (message-consumer record)
+                (process-record record)
                 (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
                 (catch WakeupException e (throw e))
                 (catch Exception e
@@ -51,69 +54,59 @@
           (finally
             (log "action=closing-kafka-consumer")
             (gregor/close kafka-consumer))))
-      (catch Exception e
-        (logger :error e)
-        (exception-handler e)
-        (throw e))))
-  java.io.Closeable
-  (close [_]
-    (when-let [consumer @consumer-atom]
-      (gregor/wakeup consumer))))
+      java.io.Closeable
+      (close [_]
+        (gregor/wakeup kafka-consumer)))))
 
-(defn init-and-start-task-pool [{:keys [pool-config pool-id consumer-task-factory] :as task-pool}]
-  (let [pool-size   (:pool-size pool-config)
-        thread-pool (Executors/newFixedThreadPool pool-size)
-        task-ids    (map (partial str pool-id "-") (range pool-size))
-        tasks       (map (partial build-task consumer-task-factory (:topics-or-regex pool-config)) task-ids)]
-    (doseq [t tasks] (.submit thread-pool t))
-    (merge task-pool {:thread-pool thread-pool
-                      :tasks tasks})))
+(defn init-and-start-task-pool [make-native-consumer make-task pool-id concurrency-level]
+  (let [native-pool (Executors/newFixedThreadPool concurrency-level)
+        task-ids    (map (partial str pool-id "-") (range concurrency-level))
+        tasks       (map (fn [task-id] (make-task (make-native-consumer) task-id)) task-ids)]
+    (doseq [t tasks] (.submit native-pool t))
+    {:native-pool native-pool
+     :tasks       tasks}))
 
-(defn stop-task-pool [{:keys [pool-config thread-pool tasks] :as task-pool}]
+(defn stop-task-pool [{:keys [native-pool tasks]} shutdown-timeout]
   (doseq [t tasks] (.close t))
-  (when thread-pool
-    (.shutdown thread-pool)
-    (.awaitTermination thread-pool (pool-config :shutdown-grace-period 4) TimeUnit/SECONDS))
-  (dissoc task-pool :thread-pool :tasks))
+  (when native-pool
+    (.shutdown native-pool)
+    (.awaitTermination native-pool shutdown-timeout TimeUnit/SECONDS)))
 
 (defn log [logger pool-id pool-config & msg]
   (logger :info (apply str "pool-id=" pool-id " pool-config=" pool-config " " msg)))
 
-(defrecord ConsumerPoolComponent [logger exception-handler pool-config consumer-task-factory]
+(defrecord KafkaReader [logger exception-handler record-processor concurrency-level shutdown-timeout topics native-consumer-type native-consumer-overrides]
   component/Lifecycle
   (start [this]
-    (let [pool-id (pr-str (:topics-or-regex pool-config))
-          log-action (partial log logger pool-id pool-config " action=")
-          this (assoc this :log-action log-action :pool-id pool-id)]
-      (assert (not= (:shutdown-grace-period pool-config) 0) "\"shutdown-grace-period\" must not be zero")
+    (assert (not= shutdown-timeout 0) "\"shutdown-timeout\" must not be zero")
+    (let [make-native-consumer (partial make-consumer native-consumer-type topics native-consumer-overrides) ; a thunk, does not need more args
+          make-task            (partial make-task logger exception-handler (:process record-processor)) ; will get native-consumer and task-id when pool is started
+
+          pool-id    (pr-str topics)
+          log-action (partial log logger pool-id " action=")]
       (log-action "starting-consumption")
-      (let [initialized-component (init-and-start-task-pool this)]
+      (let [running-pool (init-and-start-task-pool make-native-consumer make-task pool-id concurrency-level)]
         (log-action "started-consumption")
-        initialized-component)))
-
-  (stop [{:keys [logger log-action pool-id] :as this}]
+        (merge this
+               {:pool       running-pool
+                :log-action log-action}))))
+  (stop [{:keys [pool log-action] :as this}]
     (log-action "stopping-consumption")
-    (let [deinitialized-component (stop-task-pool this)]
-      (log-action "stopped-consumption")
-      deinitialized-component)))
+    (stop-task-pool pool shutdown-timeout)
+    (log-action "stopped-consumption")
+    (dissoc this :pool)))
 
-(defrecord AlwaysCommitTaskFactory [logger exception-handler consumer-component kafka-consumer-opts]
-  ConsumerTaskFactory
-  (build-task [_ topics-or-regex task-id]
-    (config/assert-consumer-opts kafka-consumer-opts)
-    (->ConsumerAlwaysCommitTask logger
-                                exception-handler
-                                (:consumer consumer-component)
-                                kafka-consumer-opts
-                                (partial make-default-consumer topics-or-regex)
-                                (atom nil)
-                                task-id)))
-
-(defrecord ProducerComponent [kafka-producer-opts]
+(defrecord KafkaWriter [native-producer-type native-producer-overrides]
   component/Lifecycle
-  (start [c]
-    (assoc c :producer (make-default-producer kafka-producer-opts)))
-  (stop [c]
-    (when-let [p (:producer c)]
+  (start [this]
+    (assoc this :native-producer (make-producer native-producer-type native-producer-overrides)))
+  (stop [this]
+    (when-let [p (:native-producer this)]
       (gregor/close p 2)) ;; 2 seconds to wait to send remaining messages, should this be configurable?
-    (dissoc c :producer)))
+    (dissoc this :native-producer)))
+
+(defn write-async [writer topic key val]
+  (gregor/send (:native-producer writer) topic key val))
+
+(defn write [writer topic key val]
+  @(write-async writer topic key val))

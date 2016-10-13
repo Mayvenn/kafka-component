@@ -13,42 +13,40 @@ consumer.
 Add to your dependencies in your `project.clj`:
 
 ```clojure
-[kafka-component "0.2.7"]
+[kafka-component "0.4.1"]
 ```
 
 # Usage
 
-Use `KafkaProducer` and `KafkaConsumerPool`:
+Use `KafkaWriter` and `KafkaReader`:
 
 ```clojure
 (ns myapp
-  (:require [kafka-component.core :refer [->KafkaProducer ->KafkaConsumerPool make-default-producer make-default-consumer]]
-            [gregor.core :as gregor]))
+  (:require [kafka-component.core :refer [map->KafkaWriter map->KafkaReader] :as kafka-component])
 
 ;; Producing messages
 
-(def producer (->KafkaProducer {"metadata.broker.list" "localhost:9092"} make-default-producer))
+(def producer-config {:native-producer-overrides {"bootstrap.servers" "localhost:9092"}})
 
-(gregor/send producer "topic" "message-key" "message-body")
+(def writer (->KafkaWriter producer-config))
+
+(kafka-component/write writer "topic" "message-key" "message-body")
 
 ;; Consuming messages
 
-(def config
-  {:shutdown-grace-period 4
-   :kafka-consumer-config {"group.id" "myapp"
-                           "auto.offset.reset" "latest"
-                           "auto.commit.enable" "false"}})
+(def consumer-config
+  {:shutdown-timeout 4
+   :concurrency-level 1
+   :topics ["one" "or_more"]
+   :native-consumer-overrides {"group.id" "myapp"
+                               "auto.offset.reset" "largest"}})
 
-(defrecord ConsumerComponent [consumer])
+(def record-processor-component {:process (fn [kafka-msg] (println "Received message"))})
 
-(def consumer (map->KafkaConsumerPool {:config config
-                                       :pool-size 2
-                                       :topic "topic"
-                                       :consumer-component (->ConsumerComponent (fn [kafka-msg] (println "Received message")))
-                                       :logger (fn [level msg] (println level msg))
-                                       :exception-handler (fn [e] (.printStackTrace e))
-                                       ;; change this to mock-consumer for tests
-                                       :make-kafka-consumer make-default-consumer}))
+(def consumer (map->KafkaReader (merge consumer-config
+                                       {:logger (fn [level msg] (println level msg))
+                                        :exception-handler (fn [e] (.printStackTrace e))
+                                        :record-processor record-processor-component})))
 
 ```
 
@@ -60,14 +58,11 @@ large startup overhead.
 
 ```clojure
 (ns myapp.tests
-  (:require [kafka-component.mock :refer [mock-producer mock-consumer fixture-restart-broker get-messages]]
+  (:require [kafka-component.mock :refer [with-test-producer-consumer]]
             [clojure.test :refer :all]))
             
-(use-fixture :each fixture-restart-broker)
-            
 (deftest test
-  (let [producer (mock-producer {})
-        consumer (mock-consumer {})]
+  (with-test-producer-consumer producer consumer
 
     ;; ...use mocks in app...
 
@@ -81,3 +76,6 @@ large startup overhead.
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
             (get-messages consumer timeout)))))
 ```
+
+You can enable mocking in a running system by passing `{:native-consumer-type
+:mock}` to the Reader, and `{:native-producer-type :mock}` to the Writer.
