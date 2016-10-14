@@ -16,11 +16,12 @@
            org.apache.kafka.common.TopicPartition))
 
 ;; TODO: update README for new consumer config/constructors
-
 (def default-mock-consumer-opts
   {"auto.offset.reset" "earliest"
    "group.id" "test"
    "max.poll.records" "1000"})
+
+(def standalone-mock-consumer-opts (assoc default-mock-consumer-opts "bootstrap.servers" "localhost.fake"))
 
 (def debug (atom false))
 
@@ -491,7 +492,7 @@
 (defmacro with-test-producer-consumer [producer-name consumer-name & body]
   `(with-test-broker
      (let [~producer-name (mock-producer {})
-           ~consumer-name (mock-consumer (merge default-mock-consumer-opts {"bootstrap.servers" "localhost.fake"}))]
+           ~consumer-name (mock-consumer standalone-mock-consumer-opts)]
        ~@body)))
 
 (defmethod core/make-consumer :mock [_ topics overrides]

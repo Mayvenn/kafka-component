@@ -41,9 +41,7 @@
 (def timeout 500)
 
 (defn mock-consumer [overrides]
-  (core/make-consumer :mock [] (merge mock/default-mock-consumer-opts
-                                      {"bootstrap.servers" "localhost.fake"}
-                                      overrides)))
+  (core/make-consumer :mock [] (merge mock/standalone-mock-consumer-opts overrides)))
 
 (defn mock-producer [overrides]
   (core/make-producer :mock overrides))
@@ -321,7 +319,7 @@
 
 (deftest consumers-fail-when-bootstrap-servers-is-missing
   (try
-    (core/make-consumer :mock [] mock/default-mock-consumer-opts)
+    (core/make-consumer :mock [] (dissoc mock/standalone-mock-consumer-opts "bootstrap.servers"))
     (is false "expected exception to be raised")
     (catch Throwable e
       (is (.contains (.getMessage e) "\"bootstrap.servers\" must be provided in the config")
@@ -329,9 +327,7 @@
 
 (deftest consumers-fail-when-group-id-is-missing
   (try
-    (core/make-consumer :mock [] (-> mock/default-mock-consumer-opts
-                                     (merge {"bootstrap.servers" "localhost:fake"})
-                                     (dissoc "group.id")))
+    (core/make-consumer :mock [] (dissoc mock/standalone-mock-consumer-opts "group.id"))
 
     (is false "expected exception to be raised")
     (catch Throwable e
