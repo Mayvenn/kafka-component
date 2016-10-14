@@ -17,6 +17,17 @@
   (doseq [k ks]
     (assert (contains? m k) (format "\"%s\" must be provided in the config" k))))
 
+(defn assert-string-values [opts]
+  (doseq [[k v] m]
+    (assert (string? v) (format "%s must be a string" k))))
+
+(defn assert-request-timeout-valid [opts]
+  (let [request-timeout (. Integer parseInt (get opts "request.timeout.ms" "30000"))
+        session-timeout (. Integer parseInt (get opts "session.timeout.ms" "30000"))
+        fetch-max-wait  (. Integer parseInt (get opts "fetch.max.wait.ms" "500"))]
+    (assert (and (> request-timeout session-timeout)
+                 (> request-timeout fetch-max-wait)))))
+
 (defn assert-consumer-opts [opts]
   (try
     (assert opts "Kafka consumer options cannot be nil")
@@ -24,6 +35,8 @@
             "\"auto.offset.reset\" should be set to one of #{\"latest\" \"earliest\" \"none\"}")
     (assert-contains-keys opts "bootstrap.servers" "group.id")
     (assert-non-nil-values opts)
+    (assert-string-values opts)
+    (assert-request-timeout-valid opts)
     (catch Throwable e
       (throw (Exception. e)))))
 

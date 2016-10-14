@@ -26,14 +26,14 @@
                                                     :native-consumer-overrides mock/default-mock-consumer-opts}}))
 
 (defmacro with-test-system
-  [sys & body]
-  `(with-resource [system# (component/start (core-test/test-system mock-config))]
+  [config sys & body]
+  `(with-resource [system# (component/start (core-test/test-system (deep-merge mock-config ~config)))]
      component/stop
      (let [~sys system#]
        ~@body)))
 
 (deftest sending-and-receiving-messages-using-mock
-  (with-test-system {:keys [messages writer]}
+  (with-test-system {} {:keys [messages writer]}
     (core/write writer "test_events" "key" "yolo")
     (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
            (deref messages 500 [])))))
@@ -337,3 +337,14 @@
     (catch Throwable e
       (is (.contains (.getMessage e) "\"group.id\" must be provided in the config")
           (str "Got: " (.getMessage e))))))
+
+(deftest reader-fail-when-request-timeout-invalid
+  (let [mock-config (assoc-in mock-config [:kafka-reader-config :native-consumer-overrides "request.timeout.ms"] "12")]
+    (is (thrown? Exception
+                 (with-test-system mock-config sys)))))
+
+(deftest reader-fail-when-given-non-string-values
+  (let [mock-config (assoc-in mock-config [:kafka-reader-config :native-consumer-overrides "request.timeout.ms"] 30000)]
+    (is (thrown? Exception
+                 (with-test-system mock-config sys)))))
+
