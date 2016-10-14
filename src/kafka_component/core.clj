@@ -31,7 +31,7 @@
             (logger :error e)
             (exception-handler e))
           (log [& msg]
-            (logger :info (apply str "task-id=" task-id " " msg)))]
+               (logger :info (apply str "task-id=" task-id " " msg)))]
     (reify
       java.lang.Runnable
       (run [_]
@@ -72,19 +72,17 @@
     (.shutdown native-pool)
     (.awaitTermination native-pool shutdown-timeout TimeUnit/SECONDS)))
 
-(defn log [logger pool-id pool-config & msg]
-  (logger :info (apply str "pool-id=" pool-id " pool-config=" pool-config " " msg)))
-
 (defrecord KafkaReader [logger exception-handler record-processor concurrency-level shutdown-timeout topics native-consumer-type native-consumer-overrides]
   component/Lifecycle
   (start [this]
     (assert (not= shutdown-timeout 0) "\"shutdown-timeout\" must not be zero")
+    (assert (ifn? (:process record-processor)) "record-processor does not have a function :process")
     (let [make-native-consumer (partial make-consumer native-consumer-type topics native-consumer-overrides) ; a thunk, does not need more args
-          make-task            (partial make-task logger exception-handler (:process record-processor)) ; will get native-consumer and task-id when pool is started
-
-          pool-id    (pr-str topics)
-          log-action (partial log logger pool-id " action=")]
-      (log-action "starting-consumption")
+          make-task            (partial make-task logger exception-handler (:process record-processor))
+                                        ;will get native-consumer and task-id when pool is started
+          pool-id              (pr-str topics)
+          log-action           (fn [& msg] (logger :info (apply str "pool-id=" pool-id " action=" msg)))]
+      (log-action "starting-consumption concurrency-level=" concurrency-level " shutdown-timeout=" shutdown-timeout " topics=" topics)
       (let [running-pool (init-and-start-task-pool make-native-consumer make-task pool-id concurrency-level)]
         (log-action "started-consumption")
         (merge this
