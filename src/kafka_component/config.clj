@@ -30,20 +30,14 @@
             "\"request.timeout.ms\" must be greater than both \"session.timeout.ms\" and \"fetch.max.wait.ms\"")))
 
 (defn assert-consumer-opts [opts]
-  (try
-    (assert opts "Kafka consumer options cannot be nil")
-    (assert (#{"latest" "earliest" "none"} (get opts "auto.offset.reset"))
-            "\"auto.offset.reset\" should be set to one of #{\"latest\" \"earliest\" \"none\"}")
-    (assert-contains-keys opts "bootstrap.servers" "group.id")
-    (assert-non-nil-values opts)
-    (assert-string-values opts)
-    (assert-request-timeout-valid opts)
-    (catch Throwable e
-      (throw (Exception. e)))))
+  (assert opts "Kafka consumer options cannot be nil")
+  (assert (#{"latest" "earliest" "none"} (get opts "auto.offset.reset"))
+          "\"auto.offset.reset\" should be set to one of #{\"latest\" \"earliest\" \"none\"}")
+  (assert-contains-keys opts "bootstrap.servers" "group.id")
+  (assert-non-nil-values opts)
+  (assert-string-values opts)
+  (assert-request-timeout-valid opts))
 
 (defn assert-producer-opts [opts]
-  (try
-    (assert opts "Kafka producer options cannot be nil")
-    (assert-non-nil-values opts)
-    (catch Exception e
-      (throw e))))
+  (assert opts "Kafka producer options cannot be nil")
+  (assert-non-nil-values opts))
