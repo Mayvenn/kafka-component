@@ -17,12 +17,12 @@
   (doseq [k ks]
     (assert (contains? m k) (format "\"%s\" must be provided in the config" k))))
 
-(defn assert-string-values [opts]
+(defn assert-string-values [m]
   (doseq [[k v] m]
     (assert (string? v) (format "%s must be a string" k))))
 
 (defn assert-request-timeout-valid [opts]
-  (let [request-timeout (. Integer parseInt (get opts "request.timeout.ms" "30000"))
+  (let [request-timeout (. Integer parseInt (get opts "request.timeout.ms" "40000"))
         session-timeout (. Integer parseInt (get opts "session.timeout.ms" "30000"))
         fetch-max-wait  (. Integer parseInt (get opts "fetch.max.wait.ms" "500"))]
     (assert (and (> request-timeout session-timeout)
