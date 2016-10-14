@@ -26,7 +26,8 @@
         session-timeout (. Integer parseInt (get opts "session.timeout.ms" "30000"))
         fetch-max-wait  (. Integer parseInt (get opts "fetch.max.wait.ms" "500"))]
     (assert (and (> request-timeout session-timeout)
-                 (> request-timeout fetch-max-wait)))))
+                 (> request-timeout fetch-max-wait))
+            "\"request.timeout.ms\" must be greater than both \"session.timeout.ms\" and \"fetch.max.wait.ms\"")))
 
 (defn assert-consumer-opts [opts]
   (try
