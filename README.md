@@ -22,7 +22,7 @@ Use `KafkaWriter` and `KafkaReader` in a system:
 
 ```clojure
 (ns myapp
-  (:require [kafka-component.core :refer [map->KafkaWriter map->KafkaReader] :as kafka-component]
+  (:require [kafka-component.core :as kafka-component]
             [com.stuartsierra.component :as component])
 
 (def config
@@ -92,13 +92,14 @@ a system. To use the mocks *inside* a system, modify the system config:
 ```clojure
 (def test-config
   (-> myapp/config
-      (assoc-in [:writer-config] :native-producer-type :mock)
-      (assoc-in [:reader-config] :native-consumer-type :mock)
-      (assoc-in [:reader-config :native-consumer-overrides] "auto.offset.reset" "earliest")))
+      (assoc-in [:writer-config :native-producer-type] :mock)
+      (assoc-in [:reader-config :native-consumer-type] :mock)
+      (assoc-in [:reader-config :native-consumer-overrides "auto.offset.reset"] "earliest")))
 ```
 
 Usually, you will want to do both.
-* If your system has a reader, produce messages outside of the system, then
-  test that the system reads and processes the messages correctly.
-* If your system has a writer, poke your system to produce a message, then test
-  that an external consumer can read the message.
+* If your system has a `reader`, create messages outside of the system with a
+  `producer`, then test that the system reads and processes the messages
+  correctly.
+* If your system has a `writer`, poke your system to produce a message, then
+  test that an external `consumer` can read the message.
