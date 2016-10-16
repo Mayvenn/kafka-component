@@ -1,4 +1,5 @@
 (ns kafka-component.mock
+  (:refer-clojure :exclude [send])
   (:require [clojure.core.async
              :refer
              [<! <!! >! >!! alt! alt!! chan close! go poll! sliding-buffer timeout]]
