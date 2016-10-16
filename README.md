@@ -18,64 +18,87 @@ Add to your dependencies in your `project.clj`:
 
 # Usage
 
-Use `KafkaWriter` and `KafkaReader`:
+Use `KafkaWriter` and `KafkaReader` in a system:
 
 ```clojure
 (ns myapp
-  (:require [kafka-component.core :refer [map->KafkaWriter map->KafkaReader] :as kafka-component])
+  (:require [kafka-component.core :refer [map->KafkaWriter map->KafkaReader] :as kafka-component]
+            [com.stuartsierra.component :as component])
 
-;; Producing messages
+(def config
+  {:writer-config {:native-producer-overrides {"bootstrap.servers" "localhost:9092"}}
+   :reader-config {:shutdown-timeout          4 ; default
+                   :concurrency-level         2
+                   :topics                    ["topic_one" "or_more"]
+                   :native-consumer-overrides {"bootstrap.servers" "localhost:9092"
+                                               "group.id"           "myapp"
+                                               "auto.offset.reset" "largest"}}})
 
-(def producer-config {:native-producer-overrides {"bootstrap.servers" "localhost:9092"}})
+(defn create-system [config]
+  (component/system-using
+    (component/system-map
+      :logger            println
+      :exception-handler (fn [e] (.printStackTrace e))
+      :record-processor  {:process (fn [{:keys [key value]}] (println "Received message: " value))}
+      :reader            (kafka-component/map->KafkaReader (config :reader-config))
+      :writer            (kafka-component/map->KafkaWriter (config :writer-config)))))
+    {:reader [:logger :exception-handler :record-processor]}))
+```
 
-(def writer (->KafkaWriter producer-config))
+## Produce a message
 
-(kafka-component/write writer "topic" "message-key" "message-body")
+```clojure
+(let [{:keys [writer]} (component/start (create-system config))]
+  (kafka-component/write writer "topic_one" "message-key" "message-body"))
+```
 
-;; Consuming messages
+It is also possible to `kakfka-component/write-async`.
 
-(def consumer-config
-  {:shutdown-timeout 4
-   :concurrency-level 1
-   :topics ["one" "or_more"]
-   :native-consumer-overrides {"group.id" "myapp"
-                               "auto.offset.reset" "largest"}})
+## Consume a mesage
 
-(def record-processor-component {:process (fn [kafka-msg] (println "Received message"))})
+Because reader is listening to "topic_one", it will deliver a message to the record-processor:
 
-(def consumer (map->KafkaReader (merge consumer-config
-                                       {:logger (fn [level msg] (println level msg))
-                                        :exception-handler (fn [e] (.printStackTrace e))
-                                        :record-processor record-processor-component})))
-
+```
+Received message: message-body
 ```
 
 # Testing
 
-You can also use specically designed mock implementations for tests. Use
-`mock-producer` and `mock-consumer`. Mocks emulate kafka in-memory without the
-large startup overhead.
+You can use specically designed mock implementations for tests. The mocks
+emulate kafka, in-memory without the large startup overhead.
 
 ```clojure
 (ns myapp.tests
-  (:require [kafka-component.mock :refer [with-test-producer-consumer]]
+  (:require [kafka-component.mock :as kafka-mock]
+            [gregor.core :as gregor]
             [clojure.test :refer :all]))
             
 (deftest test
-  (with-test-producer-consumer producer consumer
-
-    ;; ...use mocks in app...
+  (kafka-mock/with-test-producer-consumer producer consumer
+    ;; tell mock producer to send a message on a kafka queue
+    @(gregor/send producer "topic" "key" "value")
 
     ;; tell mock consumer to subscribe to topic
     (.subscribe consumer ["topic"])
 
-    ;; tell mock producer to send a message on a kafka queue
-    @(.send producer (producer-record "topic" "key" "value"))
-
     ;; read from the mock consumer
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-            (get-messages consumer timeout)))))
+            (kafka-mock/get-messages consumer 1000)))))
 ```
 
-You can enable mocking in a running system by passing `{:native-consumer-type
-:mock}` to the Reader, and `{:native-producer-type :mock}` to the Writer.
+The producer and consumer created by `with-test-producer-consumer` run outside of
+a system. To use the mocks *inside* a system, modify the system config:
+
+```clojure
+(def test-config
+  (-> myapp/config
+      (assoc-in [:writer-config] :native-producer-type :mock)
+      (assoc-in [:reader-config] :native-consumer-type :mock)
+      (assoc-in [:reader-config :native-consumer-overrides] "auto.offset.reset" "earliest")))
+```
+
+Usually, you will want to do both.
+* If your system has a reader, produce messages outside of the system, then
+  test that the system reads and processes the messages correctly.
+* If your system has a writer, poke your system to produce a message, then test
+  that an external consumer can read the message.
