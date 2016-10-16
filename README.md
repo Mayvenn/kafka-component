@@ -70,21 +70,19 @@ emulate kafka, in-memory without the large startup overhead.
 ```clojure
 (ns myapp.tests
   (:require [kafka-component.mock :as kafka-mock]
-            [gregor.core :as gregor]
             [clojure.test :refer :all]))
             
 (deftest test
   (kafka-mock/with-test-producer-consumer producer consumer
     ;; tell mock producer to send a message on a kafka queue
-    @(gregor/send producer "topic" "key" "value")
+    (kafka-mock/send producer "topic" "key" "value")
 
     ;; tell mock consumer to subscribe to topic
-    (.subscribe consumer ["topic"])
-
-    ;; read from the mock consumer
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-            (kafka-mock/get-messages consumer 1000)))))
+            (kafka-mock/get-messages consumer "topic" 1000)))))
 ```
+
+It is also possible to `kafka-mock/send-async`.
 
 The producer and consumer created by `with-test-producer-consumer` run outside of
 a system. To use the mocks *inside* a system, modify the system config:

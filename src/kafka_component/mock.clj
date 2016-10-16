@@ -461,6 +461,13 @@
     (config/assert-producer-opts config)
     (->MockProducer (atom nil) msg-ch (merge config/default-producer-config config))))
 
+(defmethod core/make-consumer :mock [_ topics overrides]
+  (mock-consumer topics overrides))
+
+(defmethod core/make-producer :mock [_ overrides]
+  (mock-producer overrides))
+
+;;;;; Test Helpers
 (defn record->clj [record]
   {:value     (.value record)
    :key       (.key record)
@@ -474,13 +481,23 @@
      (map record->clj (iterator-seq (.iterator consumer-records)))
      [])))
 
-(defn get-messages [consumer timeout]
-  (loop [i 5]
-    (if (> i 0)
-      (if-let [consumer-records (seq (records->clj (.poll consumer (/ timeout 5))))]
-        consumer-records
-        (recur (dec i)))
-      [])))
+(defn get-messages
+  ([consumer topic timeout]
+   (.subscribe consumer [topic])
+   (get-messages consumer timeout))
+  ([consumer timeout]
+   (loop [i 5]
+     (if (> i 0)
+       (if-let [consumer-records (seq (records->clj (.poll consumer (/ timeout 5))))]
+         consumer-records
+         (recur (dec i)))
+       []))))
+
+(defn send-async [producer topic k v]
+  (gregor/send producer topic k v))
+
+(defn send [producer topic k v]
+  @(send-async producer topic k v))
 
 (defmacro with-test-broker [& body]
   `(do
@@ -494,9 +511,3 @@
      (let [~producer-name (mock-producer {})
            ~consumer-name (mock-consumer standalone-mock-consumer-opts)]
        ~@body)))
-
-(defmethod core/make-consumer :mock [_ topics overrides]
-  (mock-consumer topics overrides))
-
-(defmethod core/make-producer :mock [_ overrides]
-  (mock-producer overrides))

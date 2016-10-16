@@ -1,9 +1,8 @@
 (ns kafka-component.core-test
-  (:require [kafka-component.core :refer :all]
-            [embedded-kafka.core :as ek]
+  (:require [clojure.test :refer :all]
             [com.stuartsierra.component :as component]
-            [clojure.test :refer :all]
-            [gregor.core :as gregor]))
+            [embedded-kafka.core :as ek]
+            [kafka-component.core :refer :all]))
 
 (def test-config {:kafka-reader-config {:concurrency-level         1
                                         :topics                    ["test_events"]
