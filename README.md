@@ -12,9 +12,7 @@ consumer.
 
 Add to your dependencies in your `project.clj`:
 
-```clojure
-[kafka-component "0.4.1"]
-```
+[![Clojars Project](https://img.shields.io/clojars/v/kafka-component.svg)](https://clojars.org/kafka-component)
 
 # Usage
 
