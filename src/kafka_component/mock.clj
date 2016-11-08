@@ -409,7 +409,8 @@
      mock-consumer)))
 
 ;; TODO: assertions
-(defn assert-proper-record [record])
+(defn assert-proper-record [record]
+  (assert (string? (.value record)) (str "Message record value should be a string. Got: " (type (.value record)))))
 (defn assert-producer-not-closed
   "Checks conn-open? in producer state"
   [producer-state])

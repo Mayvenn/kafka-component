@@ -59,6 +59,15 @@
     (is (= 0 (.partition res)))
     (is (= 0 (.offset res)))))
 
+(deftest send-non-string-to-producer-raises-exception
+  (let [producer (mock-producer {})]
+    (try
+      (mock/send producer "topic" "key" {"hello" "world"})
+      (is false "Expected exception thrown")
+      (catch AssertionError e
+        (is (.contains (.getMessage e) "Message record value should be a string. Got:")
+            (.getMessage e))))))
+
 (deftest send-on-producer-increments-offset
   (let [producer (mock-producer {})
         res (repeatedly 2 #(mock/send-async producer "topic" "key" "value"))]
