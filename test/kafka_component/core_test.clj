@@ -5,9 +5,19 @@
             [kafka-component.core :refer :all]))
 
 (def test-config {:kafka-reader-config {:concurrency-level         1
+                                        :commit-behavior           :per-message
                                         :topics                    ["test_events"]
                                         :native-consumer-overrides ek/kafka-config}
                   :kafka-writer-config {:native-producer-overrides ek/kafka-config}})
+
+(def interval-test-config
+  (-> test-config
+      (assoc-in [:kafka-reader-config :commit-behavior] :time-interval)
+      (update-in [:kafka-reader-config :native-consumer-overrides]
+                 assoc
+                 ;; TODO: remove need for this param
+                 "enable.auto.commit" "true"
+                 "auto.commit.interval.ms" "100")))
 
 (defn test-system
   ([config]
@@ -48,9 +58,16 @@
      (let [~sys system#]
        ~@body)))
 
-(deftest sending-and-receiving-messages-using-kafka
+(deftest sending-and-receiving-messages-using-kafka-with-message-commits
   (ek/with-test-broker producer consumer
     (with-test-system test-config {:keys [messages writer]}
+      (write writer "test_events" "key" "yolo")
+      (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
+             (deref messages 2000 []))))))
+
+(deftest sending-and-receiving-messages-using-kafka-with-interval-commits
+  (ek/with-test-broker producer consumer
+    (with-test-system interval-test-config {:keys [messages writer]}
       (write writer "test_events" "key" "yolo")
       (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
              (deref messages 2000 []))))))

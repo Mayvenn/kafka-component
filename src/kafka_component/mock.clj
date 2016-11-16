@@ -391,8 +391,8 @@
     (close! wakeup-ch)))
 
 (defn mock-consumer
-  ([config] (mock-consumer [] config))
-  ([auto-subscribe-topics config]
+  ([commit-behavior config] (mock-consumer commit-behavior [] config))
+  ([commit-behavior auto-subscribe-topics config]
    (assert (:join-ch @broker-state) "Broker is not running! Did you mean to call 'start!' first?")
    (config/assert-consumer-opts config)
    (let [{:keys [join-ch leave-ch]} @broker-state
@@ -402,8 +402,7 @@
                                        join-ch
                                        leave-ch
                                        logger
-                                       (merge config/default-consumer-config
-                                              config))]
+                                       (config/make-consumer-config commit-behavior config))]
      (when (seq auto-subscribe-topics)
        (.subscribe mock-consumer auto-subscribe-topics))
      mock-consumer)))
@@ -463,8 +462,8 @@
     (config/assert-producer-opts config)
     (->MockProducer (atom nil) msg-ch (merge config/default-producer-config config))))
 
-(defmethod core/make-consumer :mock [_ topics overrides]
-  (mock-consumer topics overrides))
+(defmethod core/make-consumer :mock [_ commit-behavior topics overrides]
+  (mock-consumer commit-behavior topics overrides))
 
 (defmethod core/make-producer :mock [_ overrides]
   (mock-producer overrides))
@@ -511,5 +510,5 @@
 (defmacro with-test-producer-consumer [producer-name consumer-name & body]
   `(with-test-broker
      (let [~producer-name (mock-producer {})
-           ~consumer-name (mock-consumer standalone-mock-consumer-opts)]
+           ~consumer-name (mock-consumer :per-message standalone-mock-consumer-opts)]
        ~@body)))
