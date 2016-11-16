@@ -11,13 +11,7 @@
                   :kafka-writer-config {:native-producer-overrides ek/kafka-config}})
 
 (def interval-test-config
-  (-> test-config
-      (assoc-in [:kafka-reader-config :commit-behavior] :time-interval)
-      (update-in [:kafka-reader-config :native-consumer-overrides]
-                 assoc
-                 ;; TODO: remove need for this param
-                 "enable.auto.commit" "true"
-                 "auto.commit.interval.ms" "100")))
+  (assoc-in test-config [:kafka-reader-config :commit-behavior] :time-interval))
 
 (defn test-system
   ([config]
