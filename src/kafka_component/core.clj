@@ -5,8 +5,18 @@
   (:import [java.util.concurrent Executors TimeUnit]
            org.apache.kafka.common.errors.WakeupException))
 
+(defn- latest-offsets [records]
+  (->> records
+       (reduce (fn [key->offset {:keys [topic partition offset]}]
+                 (update key->offset [topic partition] (fnil max 0) offset))
+               {})
+       (mapv (fn [[[topic partition] offset]]
+               {:topic topic
+                :partition partition
+                :offset offset}))))
+
 (defmulti make-consumer
-  (fn [type commit-behavior topics overrides]
+  (fn [type topics overrides]
     (config/assert-consumer-opts overrides)
     type))
 
@@ -15,59 +25,46 @@
     (config/assert-producer-opts overrides)
     type))
 
-(defmethod make-consumer :default [_ commit-behavior topics overrides]
+(defmethod make-consumer :default [_ topics overrides]
   (gregor/consumer (overrides "bootstrap.servers")
                    (overrides "group.id")
                    topics
-                   (config/make-consumer-config commit-behavior overrides)))
+                   (merge config/default-consumer-config overrides)))
 
 (defmethod make-producer :default [_ overrides]
   (gregor/producer (overrides "bootstrap.servers")
                    (merge config/default-producer-config overrides)))
 
-(defmulti try-and-commit (fn [commit-behavior process-record record kafka-consumer log log-exception] commit-behavior))
-
-(defmethod try-and-commit :per-message [commit-behavior process-record {:keys [topic partition offset key] :as record} kafka-consumer log log-exception]
-  (log "action=receiving topic=" topic " partition=" partition " key=" key)
-  (try
-    (process-record record)
-    (gregor/commit-offsets! kafka-consumer [{:topic topic :partition partition :offset (inc offset)}])
-    (catch WakeupException e (throw e))
-    (catch Exception e
-      (log-exception e "msg=error in message consumer"))))
-
-(defmethod try-and-commit :time-interval [commit-behavior process-record {:keys [topic partition offset key] :as record} kafka-consumer log log-exception]
-  (try
-    (process-record record)
-    ;; DO NOT commit: we rely on enable.auto.commit to do the commits
-    (catch WakeupException e (throw e))
-    (catch Exception e
-      (log "action=receiving topic=" topic " partition=" partition " key=" key)
-      (log-exception e "msg=error in message consumer"))))
-
-(defn make-task [commit-behavior logger exception-handler process-record make-kafka-consumer task-id]
+(defn make-task [logger exception-handler process-record make-kafka-consumer task-id]
   (let [kafka-consumer (make-kafka-consumer)
         log-exception  (fn log-exception [e & msg]
                          (logger :error (apply str "task-id=" task-id " " msg))
                          (logger :error e)
                          (exception-handler e))
-        log            (fn log [& msg]
+        log            (fn log [level & msg]
                          (logger :info (apply str "task-id=" task-id " " msg)))]
     (reify
       java.lang.Runnable
       (run [_]
         (try
-          (log "action=starting")
+          (log :info "action=starting")
 
           (while true
-            (doseq [record (gregor/poll kafka-consumer)]
-              (try-and-commit commit-behavior process-record record kafka-consumer log log-exception)))
-
-          (log "action=exiting")
-          (catch WakeupException e (log "action=woken-up"))
+            (let [records (gregor/poll kafka-consumer)]
+              (doseq [{:keys [topic partition key] :as record} records]
+                (log :debug "action=receiving topic=" topic " partition=" partition " key=" key) 
+                (try
+                  (process-record record)
+                  (catch WakeupException e (throw e))
+                  (catch Exception e
+                    (log :error "action=receiving topic=" topic " partition=" partition " key=" key) 
+                    (log-exception e "msg=error in message consumer"))))
+              (gregor/commit-offsets! kafka-consumer (latest-offsets records))))
+          (log :info "action=exiting")
+          (catch WakeupException e (log :info "action=woken-up"))
           (catch Exception e (log-exception e "msg=error in kafka consumer task runnable"))
           (finally
-            (log "action=closing-kafka-consumer")
+            (log :info "action=closing-kafka-consumer")
             (gregor/close kafka-consumer))))
       java.io.Closeable
       (close [_]
@@ -87,13 +84,13 @@
     (.shutdown native-pool)
     (.awaitTermination native-pool shutdown-timeout TimeUnit/SECONDS)))
 
-(defrecord KafkaReader [logger exception-handler record-processor concurrency-level shutdown-timeout topics native-consumer-type commit-behavior native-consumer-overrides]
+(defrecord KafkaReader [logger exception-handler record-processor concurrency-level shutdown-timeout topics native-consumer-type native-consumer-overrides]
   component/Lifecycle
   (start [this]
     (assert (not= shutdown-timeout 0) "\"shutdown-timeout\" must not be zero")
     (assert (ifn? (:process record-processor)) "record-processor does not have a function :process")
-    (let [make-native-consumer (partial make-consumer native-consumer-type commit-behavior topics native-consumer-overrides) ; a thunk, does not need more args
-          make-task            (partial make-task commit-behavior logger exception-handler (:process record-processor) make-native-consumer)
+    (let [make-native-consumer (partial make-consumer native-consumer-type topics native-consumer-overrides) ; a thunk, does not need more args
+          make-task            (partial make-task logger exception-handler (:process record-processor) make-native-consumer)
                                         ;will get task-id when pool is started
           pool-id              (pr-str topics)
           log-action           (fn [& msg] (logger :info (apply str "pool-id=" pool-id " action=" msg)))]

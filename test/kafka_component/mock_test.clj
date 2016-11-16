@@ -19,7 +19,6 @@
 (def mock-config (deep-merge core-test/test-config
                              {:kafka-writer-config {:native-producer-type :mock}
                               :kafka-reader-config {:native-consumer-type      :mock
-                                                    :commit-behavior           :per-message
                                                     :native-consumer-overrides mock/default-mock-consumer-opts}}))
 
 (defmacro with-test-system
@@ -37,9 +36,8 @@
 
 (def timeout 500)
 
-(defn mock-consumer
-  ([overrides] (mock-consumer :per-message overrides))
-  ([commit-behavior overrides] (core/make-consumer :mock commit-behavior [] (merge mock/standalone-mock-consumer-opts overrides))))
+(defn mock-consumer [overrides]
+  (core/make-consumer :mock [] (merge mock/standalone-mock-consumer-opts overrides)))
 
 (defn mock-producer [overrides]
   (core/make-producer :mock overrides))
@@ -52,12 +50,6 @@
   (reify Callback
     (onCompletion [this metadata ex]
       (cb metadata ex))))
-
-(deftest enables-auto-commit-when-time-interval-commit-behavior-is-used
-  (let [consumer (mock-consumer :time-interval {})]
-    (is (= "true" (-> consumer :config (get "enable.auto.commit")))))
-  (let [consumer (mock-consumer :per-message {})]
-    (is (= "false" (-> consumer :config (get "enable.auto.commit"))))))
 
 (deftest send-on-producer-returns-a-future-of-RecordMetadata
   (let [producer (mock-producer {})
@@ -327,7 +319,7 @@
 
 (deftest consumers-fail-when-bootstrap-servers-is-missing
   (try
-    (core/make-consumer :mock :per-message [] (dissoc mock/standalone-mock-consumer-opts "bootstrap.servers"))
+    (core/make-consumer :mock [] (dissoc mock/standalone-mock-consumer-opts "bootstrap.servers"))
     (is false "expected exception to be raised")
     (catch Throwable e
       (is (.contains (.getMessage e) "\"bootstrap.servers\" must be provided in the config")
@@ -335,7 +327,7 @@
 
 (deftest consumers-fail-when-group-id-is-missing
   (try
-    (core/make-consumer :mock :per-message [] (dissoc mock/standalone-mock-consumer-opts "group.id"))
+    (core/make-consumer :mock [] (dissoc mock/standalone-mock-consumer-opts "group.id"))
 
     (is false "expected exception to be raised")
     (catch Throwable e

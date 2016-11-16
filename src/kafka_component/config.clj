@@ -41,9 +41,3 @@
 (defn assert-producer-opts [opts]
   (assert opts "Kafka producer options cannot be nil")
   (assert-non-nil-values opts))
-
-(defn make-consumer-config [commit-behavior overrides]
-  (merge default-consumer-config
-         overrides
-         (when (= commit-behavior :time-interval)
-           {"enable.auto.commit" "true"})))
