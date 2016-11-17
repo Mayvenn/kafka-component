@@ -52,12 +52,12 @@
           (while true
             (let [records (gregor/poll kafka-consumer)]
               (doseq [{:keys [topic partition key] :as record} records]
-                (log :debug "action=receiving topic=" topic " partition=" partition " key=" key) 
+                (log :debug "action=receiving topic=" topic " partition=" partition " key=" key)
                 (try
                   (process-record record)
                   (catch WakeupException e (throw e))
                   (catch Exception e
-                    (log :error "action=receiving topic=" topic " partition=" partition " key=" key) 
+                    (log :error "action=receiving topic=" topic " partition=" partition " key=" key)
                     (log-exception e "msg=error in message consumer"))))
               (gregor/commit-offsets! kafka-consumer (latest-offsets records))))
           (log :info "action=exiting")
