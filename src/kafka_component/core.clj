@@ -42,7 +42,7 @@
                          (logger :error e)
                          (exception-handler e))
         log            (fn log [level & msg]
-                         (logger :info (apply str "task-id=" task-id " " msg)))]
+                         (logger level (apply str "task-id=" task-id " " msg)))]
     (reify
       java.lang.Runnable
       (run [_]
