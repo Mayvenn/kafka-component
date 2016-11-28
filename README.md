@@ -3,10 +3,11 @@
 Provides a Kafka consumption pool component to work with Stuart Sierra's
 component.
 
-The consumer component will manually commit offsets after each message has been
-processed, instead of relying on `auto.commit.enable`. To avoid a thread
-committing another thread's offsets, each thread receives its own kafka
-consumer.
+The consumer component will manually commit offsets after each batch of messages
+has been processed, instead of relying on `auto.commit.enable`. This library takes
+special care to make sure that messages have actually been processed before committing
+which the default `auto.commit.enable` doesn't have as strong semantics. To avoid a
+thread committing another thread's offsets, each thread receives its own kafka consumer.
 
 # Installation
 
