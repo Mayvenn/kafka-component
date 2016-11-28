@@ -8,7 +8,7 @@
 (defn- latest-offsets [records]
   (->> records
        (reduce (fn [key->offset {:keys [topic partition offset]}]
-                 (update key->offset [topic partition] (fnil max 0) offset))
+                 (update key->offset [topic partition] (comp inc (fnil max 0)) offset))
                {})
        (mapv (fn [[[topic partition] offset]]
                {:topic topic
