@@ -2,7 +2,8 @@
   (:require [clojure.test :refer :all]
             [com.stuartsierra.component :as component]
             [embedded-kafka.core :as ek]
-            [kafka-component.core :refer :all]))
+            [kafka-component.core :refer :all]
+            [gregor.core :as gregor]))
 
 (def test-config {:kafka-reader-config {:concurrency-level         1
                                         :topics                    ["test_events"]
@@ -19,7 +20,8 @@
                   :logger println
                   :exception-handler println
                   :messages messages
-                  :test-event-record-processor {:process (juxt (partial deliver messages) (partial prn "Message consumed: "))}
+                  :test-event-record-processor {:process (juxt (partial deliver messages)
+                                                               (partial prn "Message consumed: "))}
                   :test-event-reader (map->KafkaReader (:kafka-reader-config config))
                   :writer (map->KafkaWriter (:kafka-writer-config config))))
       {:test-event-reader {:logger            :logger
@@ -54,6 +56,14 @@
       (write writer "test_events" "key" "yolo")
       (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
              (deref messages 2000 []))))))
+
+(deftest commits-offset-as-offset+1
+  (ek/with-test-broker producer consumer
+    (with-test-system test-config {:keys [messages writer]}
+      (write writer "test_events" "key" "yolo")
+      (write writer "test_events" "key" "yololo")
+      (is (not-empty (deref messages 2000 [])))
+      (is (= 2 (:offset (gregor/committed consumer "test_events" 0)))))))
 
 (deftest reader-fail-when-auto-offset-reset-is-invalid
   (let [test-config (assoc-in test-config [:kafka-reader-config :native-consumer-overrides "auto.offset.reset"] "smallest")]
