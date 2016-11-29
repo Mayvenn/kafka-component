@@ -55,9 +55,9 @@
     (with-test-system test-config {:keys [messages writer]}
       (write writer "test_events" "key" "yolo")
       (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
-             (deref messages 2000 {})))
-      (testing "it should commit offsets to message offset + 1")
-      (is (= 1 (:offset (gregor/committed consumer "test_events" 0)))))))
+             (deref messages 5000 {})))
+      (testing "it should commit offsets to message offset + 1"
+        (is (= 1 (:offset (gregor/committed consumer "test_events" 0))))))))
 
 (deftest reader-fail-when-auto-offset-reset-is-invalid
   (let [test-config (assoc-in test-config [:kafka-reader-config :native-consumer-overrides "auto.offset.reset"] "smallest")]
