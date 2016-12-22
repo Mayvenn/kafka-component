@@ -3,6 +3,7 @@
             [gregor.core :as gregor]
             [kafka-component.config :as config])
   (:import [java.util.concurrent Executors TimeUnit]
+           org.apache.kafka.clients.consumer.CommitFailedException
            org.apache.kafka.common.errors.WakeupException))
 
 (defn- latest-offsets [records]
@@ -59,7 +60,10 @@
                   (catch Exception e
                     (log :error "action=receiving topic=" topic " partition=" partition " key=" key)
                     (log-exception e "msg=error in message consumer"))))
-              (gregor/commit-offsets! kafka-consumer (latest-offsets records))))
+              (try
+                (gregor/commit-offsets! kafka-consumer (latest-offsets records))
+                (catch CommitFailedException e
+                  (log-exception e "msg=error saving offsets")))))
           (log :info "action=exiting")
           (catch WakeupException e (log :info "action=woken-up"))
           (catch Exception e (log-exception e "msg=error in kafka consumer task runnable"))
