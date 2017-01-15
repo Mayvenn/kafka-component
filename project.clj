@@ -12,7 +12,6 @@
   {:uberjar {:aot :all}
    :dev {:source-paths ["dev"]
          :dependencies [[diff-eq "0.2.2"]
-                        [standalone-test-server "0.5.1"]
                         [org.clojure/tools.namespace "0.2.9"]
                         [embedded-kafka "0.4.0"]]
          :plugins [[lein-cljfmt "0.3.0"]]
