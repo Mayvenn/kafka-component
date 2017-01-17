@@ -487,9 +487,9 @@
    (.subscribe consumer [topic])
    (get-messages consumer timeout))
   ([consumer timeout]
-   (loop [i 5]
+   (loop [i (int (Math/ceil (/ timeout 100)))]
      (if (> i 0)
-       (if-let [consumer-records (seq (records->clj (.poll consumer (/ timeout 5))))]
+       (if-let [consumer-records (seq (records->clj (.poll consumer 100)))]
          consumer-records
          (recur (dec i)))
        []))))
