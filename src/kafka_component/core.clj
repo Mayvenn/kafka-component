@@ -36,7 +36,7 @@
   (gregor/producer (overrides "bootstrap.servers")
                    (merge config/default-producer-config overrides)))
 
-(defn make-task [logger exception-handler process-record make-kafka-consumer task-id]
+(defn make-task [logger exception-handler process-record poll-interval make-kafka-consumer task-id]
   (let [kafka-consumer (make-kafka-consumer)
         log-exception  (fn log-exception [e & msg]
                          (logger :error (apply str "task-id=" task-id " " msg))
@@ -51,7 +51,7 @@
           (log :info "action=starting")
 
           (while true
-            (let [records (gregor/poll kafka-consumer)]
+            (let [records (gregor/poll kafka-consumer (or poll-interval 100))]
               (doseq [{:keys [topic partition key] :as record} records]
                 (log :debug "action=receiving topic=" topic " partition=" partition " key=" key)
                 (try
@@ -88,13 +88,13 @@
     (.shutdown native-pool)
     (.awaitTermination native-pool shutdown-timeout TimeUnit/SECONDS)))
 
-(defrecord KafkaReader [logger exception-handler record-processor concurrency-level shutdown-timeout topics native-consumer-type native-consumer-overrides]
+(defrecord KafkaReader [logger exception-handler record-processor concurrency-level poll-interval shutdown-timeout topics native-consumer-type native-consumer-overrides]
   component/Lifecycle
   (start [this]
     (assert (not= shutdown-timeout 0) "\"shutdown-timeout\" must not be zero")
     (assert (ifn? (:process record-processor)) "record-processor does not have a function :process")
     (let [make-native-consumer (partial make-consumer native-consumer-type topics native-consumer-overrides) ; a thunk, does not need more args
-          make-task            (partial make-task logger exception-handler (:process record-processor) make-native-consumer)
+          make-task            (partial make-task logger exception-handler (:process record-processor) poll-interval make-native-consumer)
                                         ;will get task-id when pool is started
           pool-id              (pr-str topics)
           log-action           (fn [& msg] (logger :info (apply str "pool-id=" pool-id " action=" msg)))]
