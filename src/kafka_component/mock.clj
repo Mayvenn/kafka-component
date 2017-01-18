@@ -6,7 +6,8 @@
             [gregor.core :as gregor]
             [com.stuartsierra.component :as component]
             [kafka-component.core :as core]
-            [kafka-component.config :as config])
+            [kafka-component.config :as config]
+            [clojure.set :as set])
   (:import java.lang.Integer
            java.util.Collection
            java.util.concurrent.TimeUnit
@@ -183,22 +184,32 @@
     (rebalance-participants broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)
     (<!! rebalance-complete-ch)))
 
+(defn topics-overlap? [t1 t2]
+  (seq (set/intersection (set t1) (set t2))))
+
+(defn consumers-with-topic-overlap [consumers topics]
+  (filter (comp (partial topics-overlap? topics) all-topics) consumers))
+
 (defn consumer-coordinator [state broker-state join-ch leave-ch]
   (goe-loop []
             (alt!
               join-ch ([[consumer topics]]
                        (when consumer ; else, closed
+                         (apply-pending-topics consumer topics)
                          (let [group-id         (get-in consumer [:config "group.id"] "")
-                               group->consumers (swap! state update group-id (fnil conj #{}) consumer)]
-                           (apply-pending-topics consumer topics)
-                           (rebalance-consumers (get group->consumers group-id) broker-state)
+                               group->consumers (swap! state update group-id (fnil conj #{}) consumer)
+                               consumers (consumers-with-topic-overlap (get group->consumers group-id) topics)]
+                           (rebalance-consumers consumers broker-state)
                            (recur))))
               leave-ch ([consumer]
                         (when consumer ; else, closed
+                          (clean-up-subscriptions consumer)
                           (let [group-id         (get-in consumer [:config "group.id"] "")
-                                group->consumers (swap! state update group-id disj consumer)]
-                            (clean-up-subscriptions consumer)
-                            (rebalance-consumers (get group->consumers group-id) broker-state)
+                                topics           (all-topics consumer)
+                                group->consumers (swap! state update group-id disj consumer)
+                                consumers (consumers-with-topic-overlap (get group->consumers group-id) topics)]
+                            (when (seq consumers)
+                              (rebalance-consumers consumers broker-state))
                             (recur)))))))
 
 (defn start! []
