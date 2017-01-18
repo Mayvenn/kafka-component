@@ -200,6 +200,7 @@
       (deep-merge mock-config
                   {:kafka-reader-config {:topics                    ["topic"]
                                          :concurrency-level         1
+                                         :poll-interval             10
                                          :native-consumer-overrides {"auto.offset.reset" "earliest"
                                                                      "group.id"          "test"}}})
       (fn [system-map]
@@ -219,6 +220,7 @@
       (deep-merge mock-config
                   {:kafka-reader-config {:topics                    ["topic"]
                                          :concurrency-level         2
+                                         :poll-interval             10
                                          :native-consumer-overrides {"auto.offset.reset" "earliest"
                                                                      "group.id"          "test"}}})
       (fn [system-map]
@@ -238,6 +240,7 @@
       (deep-merge mock-config
                   {:kafka-reader-config {:topics                    ["topic"]
                                          :concurrency-level         2
+                                         :poll-interval             10
                                          :native-consumer-overrides {"auto.offset.reset" "earliest"
                                                                      "group.id"          "test-group"}}})
       (fn [system-map]
@@ -257,6 +260,7 @@
       (deep-merge mock-config
                   {:kafka-reader-config {:topics                    ["topic"]
                                          :concurrency-level         2
+                                         :poll-interval             10
                                          :native-consumer-overrides {"auto.offset.reset" "earliest"
                                                                      "group.id"          "group1"}}})
       (fn [system-map]
@@ -267,6 +271,7 @@
         (deep-merge mock-config
                     {:kafka-reader-config {:topics                    ["topic"]
                                            :concurrency-level         2
+                                           :poll-interval             10
                                            :native-consumer-overrides {"auto.offset.reset" "earliest"
                                                                        "group.id"          "group2"}}})
         (fn [system-map]
