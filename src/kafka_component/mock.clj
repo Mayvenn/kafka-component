@@ -184,11 +184,11 @@
     (rebalance-participants broker-state relevant-consumers rebalance-participants-ch rebalance-complete-ch)
     (<!! rebalance-complete-ch)))
 
-(defn topics-overlap? [t1 t2]
-  (boolean (seq (set/intersection (set t1) (set t2)))))
+(defn intersects? [v1 v1]
+  (boolean (seq (set/intersection (set v1) (set v1)))))
 
 (defn consumers-with-topic-overlap [consumers topics]
-  (filter (comp (partial topics-overlap? topics) all-topics) consumers))
+  (filter (comp (partial intersects? topics) all-topics) consumers))
 
 (defn consumer-coordinator [state broker-state join-ch leave-ch]
   (goe-loop []
