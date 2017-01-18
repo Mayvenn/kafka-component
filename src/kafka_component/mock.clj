@@ -185,7 +185,7 @@
     (<!! rebalance-complete-ch)))
 
 (defn topics-overlap? [t1 t2]
-  (seq (set/intersection (set t1) (set t2))))
+  (bool(seq (set/intersection (set t1) (set t2)))))
 
 (defn consumers-with-topic-overlap [consumers topics]
   (filter (comp (partial topics-overlap? topics) all-topics) consumers))
