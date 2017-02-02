@@ -94,3 +94,9 @@
                                 {:process "not a function"}))]
     (is (thrown? Exception
                  (with-transformed-test-system test-config test-transform sys)))))
+
+
+(deftest reader-can-be-stopped-before-being-started
+  (let [system (test-system test-config)]
+    (component/stop system)
+    (is true "The real test is that the above does not throw an exception. This is just to appease clojure.test, which expects at least one 'is'.")))

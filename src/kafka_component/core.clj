@@ -105,9 +105,10 @@
                {:pool       running-pool
                 :log-action log-action}))))
   (stop [{:keys [pool log-action] :as this}]
-    (log-action "stopping-consumption")
-    (stop-task-pool pool (or shutdown-timeout 4))
-    (log-action "stopped-consumption")
+    (when pool
+      (log-action "stopping-consumption")
+      (stop-task-pool pool (or shutdown-timeout 4))
+      (log-action "stopped-consumption"))
     (dissoc this :pool)))
 
 (defrecord KafkaWriter [native-producer-type native-producer-overrides]
