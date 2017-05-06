@@ -71,14 +71,26 @@ emulate kafka, in-memory without the large startup overhead.
   (:require [kafka-component.mock :as kafka-mock]
             [clojure.test :refer :all]))
             
-(deftest test
+(deftest basic-produce-consume
   (kafka-mock/with-test-producer-consumer producer consumer
     ;; tell mock producer to send a message on a kafka queue
     (kafka-mock/send producer "topic" "key" "value")
 
     ;; tell mock consumer to subscribe to topic
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-            (kafka-mock/get-messages consumer "topic" 1000)))))
+           (kafka-mock/accumulate-messages consumer "topic" {:timeout 1000})))))
+
+(deftest filtering-messages
+  (mock/with-test-producer-consumer producer consumer
+    (dotimes [n 100]
+      (mock/send-async producer "topic" "key" (str n)))
+
+    ;; transform and filter messages
+    (is (= [1 3]
+           (take 2 (mock/accumulate-messages consumer "topic" {:timeout    1000
+                                                               :format-fn  (comp inc #(Integer/parseInt %) :value)
+                                                               :filter-fn  odd?
+                                                               :at-least-n 2}))))))
 ```
 
 It is also possible to `kafka-mock/send-async`.

@@ -494,6 +494,10 @@
      [])))
 
 (defn get-messages
+  "DEPRECATED: use `accumulate-messages` instead.
+  Poll until `consumer` receives some messages on `topic`. If `timeout` (in ms)
+  expires first, return an empty vector."
+  {:deprecated "0.5.10"}
   ([consumer topic timeout]
    (.subscribe consumer [topic])
    (get-messages consumer timeout))
@@ -504,6 +508,34 @@
          consumer-records
          (recur (dec i)))
        []))))
+
+(defn accumulate-subscribed-messages
+  "Helper to consume messages off any existing subscriptions. Will return as
+  soon as `at-least-n` messages have been fetched. May return more, since an
+  individual poll can fetch more. If `timeout` (in ms) expires first, returns
+  any messages fetched so far. Mesages may be reformatted with `format-fn` then
+  filtered with `filter-fn`. Messages excluded by `filter-fn` do not count
+  towards `at-least-n`."
+  [consumer {:keys [timeout at-least-n format-fn filter-fn]
+             :or {at-least-n 1, format-fn identity, filter-fn identity}}]
+  {:pre [(and (number? timeout) (pos? timeout))]}
+  (loop [messages []
+         attempts (Math/ceil (/ timeout 100))]
+    (if (or (>= (count messages) at-least-n)
+            (neg? attempts))
+      messages
+      (recur
+       (concat messages
+               (->> (seq (records->clj (.poll consumer 100)))
+                    (map format-fn)
+                    (filter filter-fn)))
+       (dec attempts)))))
+
+(defn accumulate-messages
+  "Like `accumulate-subscribed-messages`, but subscribes to the `topic` first."
+  [consumer topic options]
+  (.subscribe consumer [topic])
+  (accumulate-subscribed-messages consumer options))
 
 (defn send-async [producer topic k v]
   (gregor/send producer topic k v))

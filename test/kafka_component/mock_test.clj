@@ -91,7 +91,7 @@
     (.subscribe consumer ["topic"])
     (mock/send producer "topic" "key" "value")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (mock/get-messages consumer timeout))))
+           (mock/accumulate-subscribed-messages consumer {:timeout timeout}))))
   (mock/start!))
 
 (deftest consumer-can-receive-message-from-different-partitions
@@ -101,31 +101,38 @@
     @(.send producer (producer-record "topic" "key" "value" 1))
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value" :key "key" :partition 1 :topic "topic" :offset 0}]
-           (sort-by :partition (mock/get-messages consumer "topic" timeout))))))
+           (sort-by :partition (mock/accumulate-messages consumer "topic" {:timeout timeout :at-least-n 2}))))))
 
 (deftest consumer-can-limit-number-of-messages-polled
   (let [producer (mock-producer {})
-        consumer (mock-consumer {"max.poll.records" "1"})]
+        consumer (mock-consumer {"max.poll.records" "1"})
+        first-non-empty-poll (fn []
+                               (loop [i (int (Math/ceil (/ timeout 100)))]
+                                 (if (> i 0)
+                                   (if-let [consumer-records (seq (mock/records->clj (.poll consumer 100)))]
+                                     consumer-records
+                                     (recur (dec i)))
+                                   [])))]
     (.subscribe consumer ["topic"])
     (mock/send producer "topic" "key" "value")
     (mock/send producer "topic" "key2" "value2")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (mock/get-messages consumer timeout)))
+           (first-non-empty-poll)))
     (is (= [{:value "value2" :key "key2" :partition 0 :topic "topic" :offset 1}]
-           (mock/get-messages consumer timeout)))))
+           (first-non-empty-poll)))))
 
 (deftest consumer-can-receive-message-sent-before-subscribing
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "earliest"})]
     (mock/send producer "topic" "key" "value")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (mock/get-messages consumer "topic" timeout)))))
+           (mock/accumulate-messages consumer "topic" {:timeout timeout})))))
 
 (deftest consumer-can-use-latest-auto-offset-reset-to-skip-earlier-messages
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "latest"})]
     (mock/send producer "topic" "key" "value")
-    (is (= [] (mock/get-messages consumer "topic" timeout)))))
+    (is (= [] (mock/accumulate-messages consumer "topic" {:timeout timeout})))))
 
 (deftest consumer-can-receive-messages-from-multiple-topics
   (let [producer (mock-producer {})
@@ -135,13 +142,13 @@
     (mock/send producer "topic2" "key2" "value2")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (sort-by :topic (mock/get-messages consumer timeout))))))
+           (sort-by :topic (mock/accumulate-subscribed-messages consumer {:timeout timeout}))))))
 
 (deftest consumer-waits-for-new-messages-to-arrive
   (mock/shutdown!)
   (mock/with-test-producer-consumer producer consumer
     (let [msg-promise (promise)]
-      (future (deliver msg-promise (mock/get-messages consumer "topic" (* 4 timeout))))
+      (future (deliver msg-promise (mock/accumulate-messages consumer "topic" {:timeout (* 4 timeout)})))
       (mock/send producer "topic" "key" "value")
       (is (= 1 (count (deref msg-promise (* 8 timeout) []))))))
   (mock/start!))
@@ -154,13 +161,13 @@
     (mock/send producer "topic2" "key2" "value2")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (sort-by :partition (mock/get-messages consumer timeout))))
+           (sort-by :partition (mock/accumulate-subscribed-messages consumer {:timeout timeout}))))
 
     (.unsubscribe consumer)
 
     (mock/send producer "topic" "key" "value")
     (mock/send producer "topic2" "key2" "value2")
-    (is (= [] (mock/get-messages consumer timeout)))))
+    (is (= [] (mock/accumulate-subscribed-messages consumer {:timeout timeout})))))
 
 (deftest consumer-can-be-woken-up
   (let [consumer (mock-consumer {})
