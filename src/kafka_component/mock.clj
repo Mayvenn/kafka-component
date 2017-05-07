@@ -494,7 +494,7 @@
      [])))
 
 (defn get-messages
-  "DEPRECATED: use `accumulate-messages` instead.
+  "DEPRECATED: use `txfm-messages` instead.
   Poll until `consumer` receives some messages on `topic`. If `timeout` (in ms)
   expires first, return an empty vector."
   {:deprecated "0.5.10"}
