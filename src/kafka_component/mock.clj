@@ -537,6 +537,60 @@
   (.subscribe consumer [topic])
   (accumulate-subscribed-messages consumer options))
 
+(defn txfm-subscribed-messages
+  "Helper to txfm messages sent to the `consumer` on any existing subscriptions.
+  Messages will be transformed by the transducing function `xf`. Will return as
+  soon as `xf` indicates it has enough records, or the `timeout` (in ms, by
+  default 1000) expires. Thus, to avoid waiting for the `timeout`, include e.g.
+  `(take 3)` in `xf`. If the `timeout` expires, will return any messages
+  transformed so far.
+
+  For example,
+
+  ``` clojure
+  (kafka-mock/send producer \"topic\" \"key\" \"5\")
+  (kafka-mock/send producer \"topic\" \"key\" \"6\")
+  (kafka-mock/send producer \"topic\" \"key\" \"7\")
+  (kafka-mock/send producer \"topic\" \"key\" \"8\")
+  (.subscribe consumer [\"topic\"])
+  (kafka-mock/txfm-subscribed-messages consumer (comp (map :value)
+                                                      (map #(Integer/parseInt %))
+                                                      (filter even?)
+                                                      (take 1)))
+  ;; => [6]
+  ```
+
+  By default messages retrieved from `(.poll consumer)` will be collected as by
+  `clojure.core/cat` and fed one-by-one through `xf`. This behvaior can be
+  altered by providing a different `ixf`. For example, `clojure.core/conj` will
+  feed each batch through in its entirety. This can be combined with
+  `max.poll.records` to control batch size.
+
+  Also by default, the transformed messages will be accumulated as by
+  `clojure.core/conj`, and returned. A different reducing function `rf` can be
+  supplied. For example, if `xf` produces a stream of numbers, the reducing
+  function `clojure.core/+` will return their sum."
+
+  ([consumer xf] (txfm-subscribed-messages consumer xf {}))
+  ([consumer xf {:keys [timeout ixf rf] :or {timeout 1000, ixf cat, rf conj}}]
+   {:pre [(number? timeout)
+          (pos? timeout)]}
+   (let [f ((comp ixf xf) rf)]
+     (loop [acc      (f)
+            attempts (dec (quot timeout 100))]
+       (let [result (f acc (records->clj (.poll consumer 100)))]
+         (cond
+           (reduced? result)     @result
+           (not (pos? attempts)) result
+           :else                 (recur result (dec attempts))))))))
+
+(defn txfm-messages
+  "Like `txfm-subscribed-messages`, but subscribes to the `topic` first."
+  ([consumer topic xf] (txfm-messages consumer topic xf {}))
+  ([consumer topic xf options]
+   (.subscribe consumer [topic])
+   (txfm-subscribed-messages consumer xf options)))
+
 (defn send-async [producer topic k v]
   (gregor/send producer topic k v))
 

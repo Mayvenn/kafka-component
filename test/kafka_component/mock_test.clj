@@ -91,7 +91,7 @@
     (.subscribe consumer ["topic"])
     (mock/send producer "topic" "key" "value")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (mock/accumulate-subscribed-messages consumer {:timeout timeout}))))
+           (mock/txfm-subscribed-messages consumer (take 1) {:timeout timeout}))))
   (mock/start!))
 
 (deftest consumer-can-receive-message-from-different-partitions
@@ -101,38 +101,30 @@
     @(.send producer (producer-record "topic" "key" "value" 1))
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value" :key "key" :partition 1 :topic "topic" :offset 0}]
-           (sort-by :partition (mock/accumulate-messages consumer "topic" {:timeout timeout :at-least-n 2}))))))
+           (sort-by :partition (mock/txfm-messages consumer "topic" (take 2) {:timeout timeout}))))))
 
 (deftest consumer-can-limit-number-of-messages-polled
   (let [producer (mock-producer {})
-        consumer (mock-consumer {"max.poll.records" "1"})
-        first-non-empty-poll (fn []
-                               (loop [i (int (Math/ceil (/ timeout 100)))]
-                                 (if (> i 0)
-                                   (if-let [consumer-records (seq (mock/records->clj (.poll consumer 100)))]
-                                     consumer-records
-                                     (recur (dec i)))
-                                   [])))]
-    (.subscribe consumer ["topic"])
+        consumer (mock-consumer {"max.poll.records" "1"})]
     (mock/send producer "topic" "key" "value")
     (mock/send producer "topic" "key2" "value2")
-    (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (first-non-empty-poll)))
-    (is (= [{:value "value2" :key "key2" :partition 0 :topic "topic" :offset 1}]
-           (first-non-empty-poll)))))
+    (is (= [[{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
+            [{:value "value2" :key "key2" :partition 0 :topic "topic" :offset 1}]]
+           (mock/txfm-messages consumer "topic" (take 2) {:ixf     conj
+                                                          :timeout timeout})))))
 
 (deftest consumer-can-receive-message-sent-before-subscribing
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "earliest"})]
     (mock/send producer "topic" "key" "value")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
-           (mock/accumulate-messages consumer "topic" {:timeout timeout})))))
+           (mock/txfm-messages consumer "topic" (take 1) {:timeout timeout})))))
 
 (deftest consumer-can-use-latest-auto-offset-reset-to-skip-earlier-messages
   (let [producer (mock-producer {})
         consumer (mock-consumer {"auto.offset.reset" "latest"})]
     (mock/send producer "topic" "key" "value")
-    (is (= [] (mock/accumulate-messages consumer "topic" {:timeout timeout})))))
+    (is (= [] (mock/txfm-messages consumer "topic" identity {:timeout timeout})))))
 
 (deftest consumer-can-receive-messages-from-multiple-topics
   (let [producer (mock-producer {})
@@ -142,13 +134,13 @@
     (mock/send producer "topic2" "key2" "value2")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (sort-by :topic (mock/accumulate-subscribed-messages consumer {:timeout timeout}))))))
+           (sort-by :topic (mock/txfm-subscribed-messages consumer (take 2) {:timeout timeout}))))))
 
 (deftest consumer-waits-for-new-messages-to-arrive
   (mock/shutdown!)
   (mock/with-test-producer-consumer producer consumer
     (let [msg-promise (promise)]
-      (future (deliver msg-promise (mock/accumulate-messages consumer "topic" {:timeout (* 4 timeout)})))
+      (future (deliver msg-promise (mock/txfm-messages consumer "topic" (take 1) {:timeout (* 4 timeout)})))
       (mock/send producer "topic" "key" "value")
       (is (= 1 (count (deref msg-promise (* 8 timeout) []))))))
   (mock/start!))
@@ -161,13 +153,13 @@
     (mock/send producer "topic2" "key2" "value2")
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}
             {:value "value2" :key "key2" :partition 0 :topic "topic2" :offset 0}]
-           (sort-by :partition (mock/accumulate-subscribed-messages consumer {:timeout timeout}))))
+           (sort-by :partition (mock/txfm-subscribed-messages consumer (take 2) {:timeout timeout}))))
 
     (.unsubscribe consumer)
 
     (mock/send producer "topic" "key" "value")
     (mock/send producer "topic2" "key2" "value2")
-    (is (= [] (mock/accumulate-subscribed-messages consumer {:timeout timeout})))))
+    (is (= [] (mock/txfm-subscribed-messages consumer identity {:timeout timeout})))))
 
 (deftest consumer-can-be-woken-up
   (let [consumer (mock-consumer {})

@@ -80,17 +80,19 @@ emulate kafka, in-memory without the large startup overhead.
     (is (= [{:value "value" :key "key" :partition 0 :topic "topic" :offset 0}]
            (kafka-mock/accumulate-messages consumer "topic" {:timeout 1000})))))
 
-(deftest filtering-messages
-  (mock/with-test-producer-consumer producer consumer
+(deftest transforming-messages
+  (kafka-mock/with-test-producer-consumer producer consumer
     (dotimes [n 100]
-      (mock/send-async producer "topic" "key" (str n)))
+      (kafka-mock/send producer "topic" "key" (str n)))
 
     ;; transform and filter messages
     (is (= [1 3]
-           (take 2 (mock/accumulate-messages consumer "topic" {:timeout    1000
-                                                               :format-fn  (comp inc #(Integer/parseInt %) :value)
-                                                               :filter-fn  odd?
-                                                               :at-least-n 2}))))))
+           (kafka-mock/txfm-messages consumer "topic"
+                                     (comp (map :value)
+                                           (map #(Integer/parseInt %))
+                                           (filter odd?)
+                                           (take 2))
+                                     {:timeout 1000})))))
 ```
 
 It is also possible to `kafka-mock/send-async`.
