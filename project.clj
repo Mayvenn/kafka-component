@@ -8,12 +8,17 @@
                  [com.stuartsierra/component "0.2.2"]
                  [io.weft/gregor "0.5.1"]
                  [org.clojure/core.async "0.2.391"]]
+  :codox {:source-paths ["src"]
+          :source-uri "http://github.com/Mayvenn/kafka-component/blob/master/{filepath}#L{line}"
+          :metadata {:doc/format :markdown}
+          :doc-files ["README.md"]}
   :profiles
   {:uberjar {:aot :all}
    :dev {:source-paths ["dev"]
          :dependencies [[diff-eq "0.2.2"]
                         [org.clojure/tools.namespace "0.2.9"]
                         [embedded-kafka "0.4.0"]]
-         :plugins [[lein-cljfmt "0.3.0"]]
+         :plugins [[lein-cljfmt "0.3.0"]
+                   [lein-codox "0.10.2"]]
          :injections [(require 'diff-eq.core)
                       (diff-eq.core/diff!)]}})
