@@ -114,3 +114,7 @@ Usually, you will want to do both.
   correctly.
 * If your system has a `writer`, poke your system to produce a message, then
   test that an external `consumer` can read the message.
+
+# More
+
+See the [documentation](http://mayvenn.github.io/kafka-component) for more.
