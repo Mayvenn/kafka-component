@@ -17,7 +17,7 @@
    :dev {:source-paths ["dev"]
          :dependencies [[diff-eq "0.2.2"]
                         [org.clojure/tools.namespace "0.2.9"]
-                        [embedded-kafka "0.4.0"]]
+                        [embedded-kafka "0.6.0"]]
          :plugins [[lein-cljfmt "0.3.0"]
                    [lein-codox "0.10.2"]]
          :injections [(require 'diff-eq.core)
