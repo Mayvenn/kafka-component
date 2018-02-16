@@ -50,6 +50,21 @@
      (let [~sys system#]
        ~@body)))
 
+(defn- now []
+  (.getTime (java.util.Date.)))
+
+(defn wait-until [pred timeout]
+  (let [start-time (now)
+        timed-out? (fn [start-time duration]
+                     (let [elapsed (- (now) start-time)]
+                       (> elapsed duration)))]
+    (loop [res (pred)]
+      (cond res res
+            (timed-out? start-time timeout) nil
+            :else (do
+                    (Thread/sleep 10)
+                    (recur (pred)))))))
+
 (deftest sending-and-receiving-messages-using-kafka-with-message-commits
   (ek/with-test-broker producer consumer
     (with-test-system test-config {:keys [messages writer]}
@@ -57,7 +72,8 @@
       (is (= {:topic "test_events" :partition 0 :key "key" :offset 0 :value "yolo"}
              (deref messages 10000 {})))
       (testing "it should commit offsets to message offset + 1"
-        (is (= 1 (:offset (gregor/committed consumer "test_events" 0))))))))
+        (is (wait-until #(= 1 (:offset (gregor/committed consumer "test_events" 0)))
+                        10000))))))
 
 (deftest reader-fail-when-auto-offset-reset-is-invalid
   (let [test-config (assoc-in test-config [:kafka-reader-config :native-consumer-overrides "auto.offset.reset"] "smallest")]

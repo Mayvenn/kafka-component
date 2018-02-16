@@ -66,7 +66,7 @@
                   (log-exception e "msg=error saving offsets")))))
           (log :info "action=exiting")
           (catch WakeupException e (log :info "action=woken-up"))
-          (catch Exception e (log-exception e "msg=error in kafka consumer task runnable"))
+          (catch Throwable e (log-exception e "msg=error in kafka consumer task runnable"))
           (finally
             (log :info "action=closing-kafka-consumer")
             (gregor/close kafka-consumer))))
