@@ -10,6 +10,16 @@
                                         :native-consumer-overrides ek/kafka-config}
                   :kafka-writer-config {:native-producer-overrides ek/kafka-config}})
 
+
+(defn poorly-implemented-processor [state-atom]
+  {:process (juxt (partial swap! state-atom conj)
+                  (partial prn "Message consumed: ")
+                  (fn [m] (throw (ex-info "poorly implemented" {}))))})
+
+(defn single-delivery-processor [msg-promise]
+  {:process (juxt (partial deliver msg-promise)
+                  (partial prn "Message consumed: "))})
+
 (defn test-system
   ([config]
    (test-system config identity))
@@ -20,8 +30,7 @@
                   :logger println
                   :exception-handler println
                   :messages messages
-                  :test-event-record-processor {:process (juxt (partial deliver messages)
-                                                               (partial prn "Message consumed: "))}
+                  :test-event-record-processor (single-delivery-processor messages)
                   :test-event-reader (map->KafkaReader (:kafka-reader-config config))
                   :writer (map->KafkaWriter (:kafka-writer-config config))))
       {:test-event-reader {:logger            :logger
@@ -74,6 +83,41 @@
       (testing "it should commit offsets to message offset + 1"
         (is (wait-until #(= 1 (:offset (gregor/committed consumer "test_events" 0)))
                         10000))))))
+
+(deftest when-provided-exception-handler-throws-an-exception-component-can-still-read-messages
+  (testing "recovering from a poorly implemented exception handler"
+    (with-redefs [panic! (fn [])]
+      (let [messages (atom [])]
+        (ek/with-test-broker producer consumer
+          (with-transformed-test-system test-config
+            (fn [sys] (assoc sys
+                             :exception-handler (fn [e] (throw (ex-info "Fail Whale" {})))
+                             :test-event-record-processor (poorly-implemented-processor messages)))
+            {:keys [writer]}
+            (write writer "test_events" "key" "yolo")
+            (write writer "test_events" "key" "yolo")
+            (is (wait-until (fn [] (= 2 (count @messages))) 10000))
+            (testing "it should commit offsets to message offset + 1"
+              (is (wait-until #(= 2 (:offset (gregor/committed consumer "test_events" 0)))
+                              10000)))))))))
+
+(deftest when-provided-logger-handler-throws-an-exception-component-can-still-read-messages
+  (testing "recovering from a poorly implemented logger"
+    (with-redefs [panic! (fn [])]
+      (let [messages (atom [])]
+        (ek/with-test-broker producer consumer
+          (with-transformed-test-system test-config
+            (fn [sys] (assoc sys
+                             :logger (fn [level err] (when (not (#{:info :debug} level))
+                                                       (throw (ex-info "Fail Whale" {}))))
+                             :test-event-record-processor (poorly-implemented-processor messages)))
+            {:keys [writer]}
+            (write writer "test_events" "key" "yolo")
+            (write writer "test_events" "key" "yolo")
+            (is (wait-until (fn [] (= 2 (count @messages))) 10000))
+            (testing "it should commit offsets to message offset + 1"
+              (is (wait-until #(= 2 (:offset (gregor/committed consumer "test_events" 0)))
+                              10000)))))))))
 
 (deftest reader-fail-when-auto-offset-reset-is-invalid
   (let [test-config (assoc-in test-config [:kafka-reader-config :native-consumer-overrides "auto.offset.reset"] "smallest")]

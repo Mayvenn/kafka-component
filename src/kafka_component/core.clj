@@ -36,14 +36,33 @@
   (gregor/producer (overrides "bootstrap.servers")
                    (merge config/default-producer-config overrides)))
 
+(defmacro with-err-str [& body]
+  `(let [wr# (java.io.StringWriter.)]
+     (binding [*err* wr#]
+       ~@body)
+     (str wr#)))
+
+(defn panic! []
+  (System/exit 1))
+
+(defmacro ^{:style/indent 2} try-or-panic [task-id panic-msg & body]
+  `(try
+     ~@body
+     (catch Throwable t#
+       (println (str "source=kafka-consumer action=exception notice=a restart may be required to continue processing kafka partitions msg=" ~panic-msg " task-id=" ~task-id " exception=" (with-err-str (.printStackTrace t#))))
+       (panic!))))
+
 (defn make-task [logger exception-handler process-record poll-interval make-kafka-consumer task-id]
   (let [kafka-consumer (make-kafka-consumer)
         log-exception  (fn log-exception [e & msg]
-                         (logger :error (apply str "task-id=" task-id " " msg))
-                         (logger :error e)
-                         (exception-handler e))
+                         (try-or-panic task-id "failed to use logger to log exception"
+                           (logger :error (apply str "task-id=" task-id " " msg))
+                           (logger :error e))
+                         (try-or-panic task-id "failed to use exception-handler to log exception"
+                           (exception-handler e)))
         log            (fn log [level & msg]
-                         (logger level (apply str "task-id=" task-id " " msg)))]
+                         (try-or-panic task-id (format "failed to log %s %s" level (pr-str msg))
+                           (logger level (apply str "task-id=" task-id " " msg))))]
     (reify
       java.lang.Runnable
       (run [_]
