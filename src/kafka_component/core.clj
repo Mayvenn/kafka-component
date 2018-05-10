@@ -43,7 +43,7 @@
      (str wr#)))
 
 (defn panic! []
-  (System/exit 1))
+  (System/exit 63))
 
 (defmacro ^{:style/indent 2} try-or-panic [task-id panic-msg & body]
   `(try
