@@ -146,7 +146,8 @@
   (try
     @(write-async writer topic key val)
     (catch Throwable t
-      (let [outer-exception (ex-info {:throwable t
+      (let [outer-exception (ex-info "Unable to write to kafka"
+                                     {:throwable t
                                       :topic     topic
                                       :key       key})]
         (when (:logger writer)
