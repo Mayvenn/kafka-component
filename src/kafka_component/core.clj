@@ -149,5 +149,6 @@
       (let [outer-exception (ex-info {:throwable t
                                       :topic     topic
                                       :key       key})]
-        ((:logger writer) :error outer-exception)
+        (when (:logger writer)
+          ((:logger writer) :error outer-exception))
         (throw outer-exception)))))
