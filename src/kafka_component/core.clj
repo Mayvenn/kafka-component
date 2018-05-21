@@ -130,7 +130,7 @@
       (log-action "stopped-consumption"))
     (dissoc this :pool)))
 
-(defrecord KafkaWriter [native-producer-type native-producer-overrides]
+(defrecord KafkaWriter [logger native-producer-type native-producer-overrides]
   component/Lifecycle
   (start [this]
     (assoc this :native-producer (make-producer native-producer-type native-producer-overrides)))
@@ -143,4 +143,11 @@
   (gregor/send (:native-producer writer) topic key val))
 
 (defn write [writer topic key val]
-  @(write-async writer topic key val))
+  (try
+    @(write-async writer topic key val)
+    (catch Throwable t
+      (let [outer-exception (ex-info {:throwable t
+                                      :topic     topic
+                                      :key       key})]
+        ((:logger writer) :error outer-exception)
+        (throw outer-exception)))))
