@@ -76,7 +76,7 @@
                 (try
                   (process-record record)
                   (catch WakeupException e (throw e))
-                  (catch Exception e
+                  (catch Throwable e
                     (log :error "action=receiving topic=" topic " partition=" partition " key=" key)
                     (log-exception e "msg=error in message consumer"))))
               (try
