@@ -6,7 +6,7 @@
   :deploy-repositories [["releases" :clojars]]
   :dependencies [[org.clojure/clojure "1.9.0"]
                  [com.stuartsierra/component "0.2.2"]
-                 [io.weft/gregor "0.6.0"]
+                 [io.weft/gregor "0.7.0"]
                  [org.clojure/core.async "0.4.474"]]
   :codox {:source-paths ["src"]
           :source-uri "http://github.com/Mayvenn/kafka-component/blob/master/{filepath}#L{line}"
