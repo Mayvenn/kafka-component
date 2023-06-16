@@ -52,16 +52,19 @@
        (println (str "source=kafka-consumer action=exception notice=a restart may be required to continue processing kafka partitions msg=" ~panic-msg " task-id=" ~task-id " exception=" (with-err-str (.printStackTrace t#))))
        (panic!))))
 
+(def report-health-interval (* 1 60 1000)) ;; Wait 10 minutes between reporting health
+
 (defn make-task [logger exception-handler process-record poll-interval make-kafka-consumer task-id]
   (let [kafka-consumer (make-kafka-consumer)
         log-exception  (fn log-exception [e message]
                          (try-or-panic task-id "failed to use logger to log exception"
                                        (logger :event-error message))
                          (try-or-panic task-id "failed to use exception-handler to log exception"
-                           (exception-handler e)))
+                                       (exception-handler e)))
         log            (fn log [level msg]
                          (try-or-panic task-id (format "failed to log %s %s" level (pr-str msg))
-                           (logger level msg)))]
+                                       (logger level msg)))
+        poll-counter   (atom 0)]
     (reify
       java.lang.Runnable
       (run [_]
@@ -69,29 +72,36 @@
           (log :event {:event {:name :kafka.consumer.task/started}})
 
           (while true
+            (swap! poll-counter inc)
+            (when (= (mod @poll-counter
+                          (/ report-health-interval (or poll-interval 100)))
+                     0)
+              (reset! poll-counter 0)
+              (log :event {:event {:name :kafka.consumer.task/healthy
+                                   :data {:task-id   task-id}}}))
             (let [records (gregor/poll kafka-consumer (or poll-interval 100))]
               (doseq [{:keys [topic partition key] :as record} records]
                 (log :event {:event {:name :kafka.consumer.task/received
-                                     :data {:task-id task-id
-                                            :topic topic
+                                     :data {:task-id   task-id
+                                            :topic     topic
                                             :partition partition
-                                            :key key}}})
+                                            :key       key}}})
                 (try
                   (process-record record)
                   (catch WakeupException e (throw e))
                   (catch Throwable e
                     (log-exception e {:event {:name :kafka.consumer.task/erred-while-processing-message
-                                              :data {:task-id task-id
-                                                     :topic topic
+                                              :data {:task-id   task-id
+                                                     :topic     topic
                                                      :partition partition
-                                                     :key key
-                                                     :error e}}}))))
+                                                     :key       key
+                                                     :error     e}}}))))
               (try
                 (gregor/commit-offsets! kafka-consumer (latest-offsets records))
                 (catch CommitFailedException e
                   (log-exception e {:event {:name :kafka.consumer.task/erred-saving-offsets
                                             :data {:task-id task-id
-                                                   :error e}}})))))
+                                                   :error   e}}})))))
           (log :event {:event {:name :kafka.consumer.task/exiting
                                :data {:task-id task-id}}})
           (catch WakeupException _
@@ -99,7 +109,7 @@
                                  :data {:task-id task-id}}}))
           (catch Throwable e
             (log-exception e {:event {:name :kafka.consumer.task/erred-in-task-runnable
-                                      :data {:error e
+                                      :data {:error   e
                                              :task-id task-id}}}))
           (finally
             (log :event {:event {:name :kafka.consumer.task/closed
