@@ -54,40 +54,56 @@
 
 (defn make-task [logger exception-handler process-record poll-interval make-kafka-consumer task-id]
   (let [kafka-consumer (make-kafka-consumer)
-        log-exception  (fn log-exception [e & msg]
+        log-exception  (fn log-exception [e message]
                          (try-or-panic task-id "failed to use logger to log exception"
-                           (logger :error (apply str "task-id=" task-id " " msg))
-                           (logger :error e))
+                                       (logger :event-error message))
                          (try-or-panic task-id "failed to use exception-handler to log exception"
                            (exception-handler e)))
-        log            (fn log [level & msg]
+        log            (fn log [level msg]
                          (try-or-panic task-id (format "failed to log %s %s" level (pr-str msg))
-                           (logger level (apply str "task-id=" task-id " " msg))))]
+                           (logger level msg)))]
     (reify
       java.lang.Runnable
       (run [_]
         (try
-          (log :info "action=starting")
+          (log :event {:event {:name :kafka.consumer.task/started}})
 
           (while true
             (let [records (gregor/poll kafka-consumer (or poll-interval 100))]
               (doseq [{:keys [topic partition key] :as record} records]
-                (log :debug "action=receiving topic=" topic " partition=" partition " key=" key)
+                (log :event {:event {:name :kafka.consumer.task/received
+                                     :data {:task-id task-id
+                                            :topic topic
+                                            :partition partition
+                                            :key key}}})
                 (try
                   (process-record record)
                   (catch WakeupException e (throw e))
                   (catch Throwable e
-                    (log :error "action=receiving topic=" topic " partition=" partition " key=" key)
-                    (log-exception e "msg=error in message consumer"))))
+                    (log-exception e {:event {:name :kafka.consumer.task/erred-while-processing-message
+                                              :data {:task-id task-id
+                                                     :topic topic
+                                                     :partition partition
+                                                     :key key
+                                                     :error e}}}))))
               (try
                 (gregor/commit-offsets! kafka-consumer (latest-offsets records))
                 (catch CommitFailedException e
-                  (log-exception e "msg=error saving offsets")))))
-          (log :info "action=exiting")
-          (catch WakeupException e (log :info "action=woken-up"))
-          (catch Throwable e (log-exception e "msg=error in kafka consumer task runnable"))
+                  (log-exception e {:event {:name :kafka.consumer.task/erred-saving-offsets
+                                            :data {:task-id task-id
+                                                   :error e}}})))))
+          (log :event {:event {:name :kafka.consumer.task/exiting
+                               :data {:task-id task-id}}})
+          (catch WakeupException _
+            (log :event {:event {:name :kafka.consumer.task/woke-up
+                                 :data {:task-id task-id}}}))
+          (catch Throwable e
+            (log-exception e {:event {:name :kafka.consumer.task/erred-in-task-runnable
+                                      :data {:error e
+                                             :task-id task-id}}}))
           (finally
-            (log :info "action=closing-kafka-consumer")
+            (log :event {:event {:name :kafka.consumer.task/closed
+                                 :data {:task-id task-id}}})
             (gregor/close kafka-consumer))))
       java.io.Closeable
       (close [_]
@@ -116,18 +132,29 @@
           make-task            (partial make-task logger exception-handler (:process record-processor) poll-interval make-native-consumer)
                                         ;will get task-id when pool is started
           pool-id              (pr-str topics)
-          log-action           (fn [& msg] (logger :info (apply str "pool-id=" pool-id " action=" msg)))]
-      (log-action "starting-consumption concurrency-level=" concurrency-level " shutdown-timeout=" shutdown-timeout " topics=" topics)
+          log-data             {:concurrency-level         concurrency-level
+                                :shutdown-timeout          shutdown-timeout
+                                :topics                    topics
+                                :poll-interval             poll-interval
+                                :native-consumer-overrides native-consumer-overrides
+                                :native-consumer-type      native-consumer-type
+                                :pool-id                   pool-id}]
+
+      (logger :event {:event {:name :kafka.consumer/initialized
+                              :data log-data}})
       (let [running-pool (init-and-start-task-pool make-task pool-id concurrency-level)]
-        (log-action "started-consumption")
+        (logger :event {:event {:name :kafka.consumer/started
+                                :data log-data}})
         (merge this
-               {:pool       running-pool
-                :log-action log-action}))))
-  (stop [{:keys [pool log-action] :as this}]
+               {:pool     running-pool
+                :log-data log-data}))))
+  (stop [{:keys [pool log-data] :as this}]
     (when pool
-      (log-action "stopping-consumption")
+      (logger :event {:event {:name :kafka.consumer/started-to-stop
+                              :data log-data}})
       (stop-task-pool pool (or shutdown-timeout 4))
-      (log-action "stopped-consumption"))
+      (logger :event {:event {:name :kafka.consumer/stopped
+                              :data log-data}}))
     (dissoc this :pool)))
 
 (defrecord KafkaWriter [logger native-producer-type native-producer-overrides]
@@ -152,5 +179,8 @@
                                       :key   key}
                                      t)]
         (when (:logger writer)
-          ((:logger writer) :error outer-exception))
+          ((:logger writer) :event-error {:event {:name :kafka.producer/erred
+                                                  :data {:error outer-exception
+                                                         :topic topic
+                                                         :key   key}}}))
         (throw outer-exception)))))
