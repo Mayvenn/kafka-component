@@ -1,7 +1,9 @@
 (ns kafka-component.core
   (:require [com.stuartsierra.component :as component]
             [gregor.core :as gregor]
-            [kafka-component.config :as config])
+            [kafka-component.config :as config]
+            [clojure.string :as string]
+            [clojure.string :as str])
   (:import [java.util.concurrent Executors TimeUnit]
            org.apache.kafka.clients.consumer.CommitFailedException
            org.apache.kafka.common.errors.WakeupException))
@@ -133,12 +135,52 @@
     (.shutdown native-pool)
     (.awaitTermination native-pool shutdown-timeout TimeUnit/SECONDS)))
 
-(defrecord KafkaReader [logger exception-handler record-processor concurrency-level poll-interval shutdown-timeout topics native-consumer-type native-consumer-overrides]
+(defn kw-name
+  "Returns a keyword as a string with namespace preserved."
+  [kw-or-str]
+  (-> kw-or-str
+      keyword
+      str
+      (subs 1)))
+
+(defn unstructure-log-message [message]
+  (if (contains? message :event)
+    (let [event (:event message)]
+      (->> (:data event)
+           (into [["action" (-> event :name kw-name)]]
+                 (map (fn [[key value]]
+                        [(kw-name key)
+                         (cond
+                           (nil? value)     "nil"
+                           (keyword? value) (kw-name value)
+                           :else value)])))
+           (map (partial string/join "="))
+           (string/join " ")))
+    (prn-str message)))
+
+(defrecord KafkaReader [logger
+                        structured-logging?
+                        exception-handler
+                        record-processor
+                        concurrency-level
+                        poll-interval
+                        shutdown-timeout
+                        topics
+                        native-consumer-type
+                        native-consumer-overrides]
   component/Lifecycle
   (start [this]
     (assert (not= shutdown-timeout 0) "\"shutdown-timeout\" must not be zero")
     (assert (ifn? (:process record-processor)) "record-processor does not have a function :process")
-    (let [make-native-consumer (partial make-consumer native-consumer-type topics native-consumer-overrides) ; a thunk, does not need more args
+    (let [logger               (if structured-logging?
+                                 logger
+                                 (fn [level data]
+                                   (logger (case level
+                                             :event :debug
+                                             :event-error :error
+                                             :info)
+                                           (unstructure-log-message data))))
+          make-native-consumer (partial make-consumer native-consumer-type topics native-consumer-overrides) ; a thunk, does not need more args
           make-task            (partial make-task logger exception-handler (:process record-processor) poll-interval make-native-consumer)
                                         ;will get task-id when pool is started
           pool-id              (pr-str topics)
@@ -158,14 +200,22 @@
         (merge this
                {:pool     running-pool
                 :log-data log-data}))))
-  (stop [{:keys [pool log-data] :as this}]
-    (when pool
-      (logger :event {:event {:name :kafka.consumer/started-to-stop
-                              :data log-data}})
-      (stop-task-pool pool (or shutdown-timeout 4))
-      (logger :event {:event {:name :kafka.consumer/stopped
-                              :data log-data}}))
-    (dissoc this :pool)))
+  (stop [{:keys [pool log-data logger] :as this}]
+    (let [logger               (if structured-logging?
+                                 logger
+                                 (fn [level data]
+                                   (logger (case level
+                                             :event :debug
+                                             :event-error :error
+                                             :info)
+                                           (unstructure-log-message data))))]
+      (when pool
+        (logger :event {:event {:name :kafka.consumer/started-to-stop
+                                :data log-data}})
+        (stop-task-pool pool (or shutdown-timeout 4))
+        (logger :event {:event {:name :kafka.consumer/stopped
+                                :data log-data}}))
+      (dissoc this :pool :logger))))
 
 (defrecord KafkaWriter [logger native-producer-type native-producer-overrides]
   component/Lifecycle

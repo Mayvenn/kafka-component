@@ -10,7 +10,6 @@
                                         :native-consumer-overrides ek/kafka-config}
                   :kafka-writer-config {:native-producer-overrides ek/kafka-config}})
 
-
 (defn poorly-implemented-processor [state-atom]
   {:process (juxt (partial swap! state-atom conj)
                   (partial prn "Message consumed: ")
@@ -154,7 +153,6 @@
                                 {:process "not a function"}))]
     (is (thrown? Exception
                  (with-transformed-test-system test-config test-transform sys)))))
-
 
 (deftest reader-can-be-stopped-before-being-started
   (let [system (test-system test-config)]
