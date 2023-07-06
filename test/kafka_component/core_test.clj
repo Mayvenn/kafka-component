@@ -8,7 +8,8 @@
 (def test-config {:kafka-reader-config {:concurrency-level         1
                                         :topics                    ["test_events"]
                                         :native-consumer-overrides ek/kafka-config}
-                  :kafka-writer-config {:native-producer-overrides ek/kafka-config}})
+                  :kafka-writer-config {:structured-logging? true
+                                        :native-producer-overrides ek/kafka-config}})
 
 (defn poorly-implemented-processor [state-atom]
   {:process (juxt (partial swap! state-atom conj)
@@ -32,9 +33,9 @@
                   :test-event-record-processor (single-delivery-processor messages)
                   :test-event-reader (map->KafkaReader (:kafka-reader-config config))
                   :writer (map->KafkaWriter (:kafka-writer-config config))))
-      {:test-event-reader {:logger            :logger
-                           :exception-handler :exception-handler
-                           :record-processor  :test-event-record-processor}}))))
+      {:test-event-reader {:logger              :logger
+                           :exception-handler   :exception-handler
+                           :record-processor    :test-event-record-processor}}))))
 
 (defmacro with-resource
   [bindings close-fn & body]
