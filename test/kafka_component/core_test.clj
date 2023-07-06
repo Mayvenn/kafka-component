@@ -13,7 +13,7 @@
 (defn poorly-implemented-processor [state-atom]
   {:process (juxt (partial swap! state-atom conj)
                   (partial prn "Message consumed: ")
-                  (fn [m] (throw (ex-info "poorly implemented" {}))))})
+                  (fn [m] (throw (ex-info "poorly implemented to test failures while processing a message" {}))))})
 
 (defn single-delivery-processor [msg-promise]
   {:process (juxt (partial deliver msg-promise)
